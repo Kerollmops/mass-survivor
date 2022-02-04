@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bevy = "0.6"
+bevy = "0.6.0"
+bevy_asset_loader = { version = "0.8.0", features = ["render"] }
 rand = "0.8.4"

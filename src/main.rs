@@ -2,6 +2,7 @@ use std::mem;
 
 use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
+use bevy_asset_loader::{AssetCollection, AssetLoader};
 use rand::Rng;
 
 const MAP_SIZE: u32 = 41;
@@ -11,17 +12,23 @@ const PLAYER_SPEED: f32 = 0.5;
 const ENNEMIES_SPEED: f32 = 0.1;
 
 fn main() {
-    App::new()
+    let mut app = App::new();
+    AssetLoader::new(MyStates::AssetLoading)
+        .continue_to_state(MyStates::Next)
+        .with_collection::<IconsetAssets>()
+        .build(&mut app);
+
+    app.add_state(MyStates::AssetLoading)
         .insert_resource(ClearColor(Color::rgb(0.53, 0.53, 0.53)))
         .add_plugins(DefaultPlugins)
         .add_startup_system(setup)
         .add_startup_system(spawn_player)
-        .add_system(camera_follow)
-        .add_system(spawn_ennemies)
-        .add_system(move_ennemies)
-        .add_system(ennemies_repulsion)
-        .add_system(move_player)
-        .add_system(apply_velocity)
+        .add_system_set(SystemSet::on_update(MyStates::Next).with_system(camera_follow))
+        .add_system_set(SystemSet::on_update(MyStates::Next).with_system(spawn_ennemies))
+        .add_system_set(SystemSet::on_update(MyStates::Next).with_system(move_ennemies))
+        .add_system_set(SystemSet::on_update(MyStates::Next).with_system(ennemies_repulsion))
+        .add_system_set(SystemSet::on_update(MyStates::Next).with_system(move_player))
+        .add_system_set(SystemSet::on_update(MyStates::Next).with_system(apply_velocity))
         .run();
 }
 
@@ -125,6 +132,7 @@ fn gen_in_radius<R: Rng>(rng: &mut R, center: Vec3, radius: f32, deadzone: f32) 
 
 fn spawn_ennemies(
     time: Res<Time>,
+    iconset_assets: Res<IconsetAssets>,
     mut ennemy_wave_spawned: ResMut<EnnemyWaveSpawned>,
     player_query: Query<&Transform, With<Player>>,
     mut commands: Commands,
@@ -138,13 +146,11 @@ fn spawn_ennemies(
                         .extend(90.0);
 
                     commands
-                        .spawn_bundle(SpriteBundle {
-                            transform: Transform::from_translation(pos),
-                            sprite: Sprite {
-                                color: Color::rgb(0., 0.9, 0.3),
-                                custom_size: Some(Vec2::new(0.3, 0.3)),
-                                ..Default::default()
-                            },
+                        .spawn_bundle(SpriteSheetBundle {
+                            transform: Transform::from_translation(pos)
+                                .with_scale(Vec3::splat(0.02)),
+                            sprite: TextureAtlasSprite::new(162),
+                            texture_atlas: iconset_assets.iconset_standalone.clone(),
                             ..Default::default()
                         })
                         .insert(Velocity::default())
@@ -166,8 +172,11 @@ fn move_ennemies(
     };
 
     for (mut velocity, transform) in ennemies_query.iter_mut() {
-        let direction = player_transform.translation.xy() - transform.translation.xy();
-        velocity.0 += direction * ENNEMIES_SPEED;
+        let player = player_transform.translation.xy();
+        let ennemy = transform.translation.xy();
+        let direction = player - ennemy;
+        let strenght = player.distance(ennemy) / 10.0;
+        velocity.0 += direction * strenght * ENNEMIES_SPEED;
     }
 }
 
@@ -178,7 +187,7 @@ fn ennemies_repulsion(mut ennemies_query: Query<(&mut Velocity, &Transform, &Enn
         if dist <= 2.0 {
             let strenght = 2.0 - dist;
             let dir = (btransf.translation - atransf.translation).normalize_or_zero().xy();
-            avel.0 -= dir * (strenght / 20.0);
+            avel.0 -= dir * (strenght / 50.0);
         }
     }
 }
@@ -195,6 +204,12 @@ fn camera_follow(
             transform.translation.y = pos.y;
         }
     }
+}
+
+#[derive(Clone, Eq, PartialEq, Debug, Hash)]
+enum MyStates {
+    AssetLoading,
+    Next,
 }
 
 #[derive(Component)]
@@ -214,4 +229,12 @@ impl EnnemyWaveSpawned {
         let EnnemyWaveSpawned(old) = self;
         mem::replace(old, true)
     }
+}
+
+// fish 162-165
+#[derive(AssetCollection)]
+struct IconsetAssets {
+    #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 18, rows = 31))]
+    #[asset(path = "images/iconset_standalone.png")]
+    iconset_standalone: Handle<TextureAtlas>,
 }
