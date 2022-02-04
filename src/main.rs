@@ -178,7 +178,7 @@ fn ennemies_repulsion(mut ennemies_query: Query<(&mut Velocity, &Transform, &Enn
         if dist <= 2.0 {
             let strenght = 2.0 - dist;
             let dir = (btransf.translation - atransf.translation).normalize_or_zero().xy();
-            avel.0 -= dir * strenght;
+            avel.0 -= dir * (strenght / 20.0);
         }
     }
 }
