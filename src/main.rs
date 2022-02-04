@@ -1,33 +1,23 @@
+use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
-use bevy::tasks::IoTaskPool;
-use bevy_ggrs::*;
-use ggrs::PlayerType;
-use matchbox_socket::WebRtcNonBlockingSocket;
+use rand::Rng;
 
-use self::components::Player;
-use self::input::{direction, input, INPUT_SIZE};
+const MAP_SIZE: u32 = 41;
+const GRID_WIDTH: f32 = 0.05;
+const ENNEMIES_SPEED: f32 = 0.9;
 
-mod components;
-mod input;
+struct EnnemyWaveSpawned(bool);
 
 fn main() {
     App::new()
         .insert_resource(ClearColor(Color::rgb(0.53, 0.53, 0.53)))
         .add_plugins(DefaultPlugins)
-        .add_plugin(GGRSPlugin)
         .add_startup_system(setup)
         .add_startup_system(spawn_player)
-        .add_startup_system(start_matchbox_socket)
-        .add_system(wait_for_players)
         .add_system(camera_follow)
-        .with_input_system(input)
-        .with_rollback_schedule(
-            Schedule::default().with_stage(
-                "ROLLBACK_STAGE",
-                SystemStage::single_threaded().with_system(move_players),
-            ),
-        )
-        .register_rollback_type::<Transform>()
+        .add_system(move_player)
+        .add_system(spawn_ennemies)
+        .add_system(move_ennemies)
         .run();
 }
 
@@ -35,69 +25,47 @@ fn setup(mut commands: Commands) {
     let mut camera_bundle = OrthographicCameraBundle::new_2d();
     camera_bundle.orthographic_projection.scale = 1. / 50.;
     commands.spawn_bundle(camera_bundle);
-}
+    commands.insert_resource(EnnemyWaveSpawned(false));
 
-fn start_matchbox_socket(mut commands: Commands, task_pool: Res<IoTaskPool>) {
-    let room_url = "ws://127.0.0.1:3536/next_2";
-    info!("connecting to matchbox server: {:?}", room_url);
-    let (socket, message_loop) = WebRtcNonBlockingSocket::new(room_url);
-
-    // The message loop needs to be awaited, or nothing will happen.
-    // We do this here using bevy's task system.
-    task_pool.spawn(message_loop).detach();
-
-    commands.insert_resource(Some(socket));
-}
-
-struct LocalPlayerHandle(usize);
-
-fn wait_for_players(mut commands: Commands, mut socket: ResMut<Option<WebRtcNonBlockingSocket>>) {
-    let socket = socket.as_mut();
-
-    // If there is no socket we've already started the game
-    if socket.is_none() {
-        return;
+    // Horizontal lines
+    for i in 0..=MAP_SIZE {
+        commands.spawn_bundle(SpriteBundle {
+            transform: Transform::from_translation(Vec3::new(
+                0.,
+                i as f32 - MAP_SIZE as f32 / 2.,
+                10.,
+            )),
+            sprite: Sprite {
+                color: Color::rgb(0.27, 0.27, 0.27),
+                custom_size: Some(Vec2::new(MAP_SIZE as f32, GRID_WIDTH)),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
     }
 
-    // Check for new connections
-    socket.as_mut().unwrap().accept_new_connections();
-    let players = socket.as_ref().unwrap().players();
-
-    let num_players = 2;
-    if players.len() < num_players {
-        return; // wait for more players
+    // Vertical lines
+    for i in 0..=MAP_SIZE {
+        commands.spawn_bundle(SpriteBundle {
+            transform: Transform::from_translation(Vec3::new(
+                i as f32 - MAP_SIZE as f32 / 2.,
+                0.,
+                10.,
+            )),
+            sprite: Sprite {
+                color: Color::rgb(0.27, 0.27, 0.27),
+                custom_size: Some(Vec2::new(GRID_WIDTH, MAP_SIZE as f32)),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
     }
-
-    info!("All peers have joined, going in-game");
-
-    // consume the socket (currently required because GGRS takes ownership of its socket)
-    let socket = socket.take().unwrap();
-
-    let max_prediction = 12;
-
-    // create a GGRS P2P session
-    let mut p2p_session =
-        ggrs::P2PSession::new_with_socket(num_players as u32, INPUT_SIZE, max_prediction, socket);
-
-    for (i, player) in players.into_iter().enumerate() {
-        p2p_session.add_player(player, i).expect("failed to add player");
-
-        if player == PlayerType::Local {
-            // set input delay for the local player
-            p2p_session.set_frame_delay(2, i).unwrap();
-            commands.insert_resource(LocalPlayerHandle(i));
-        }
-    }
-
-    // start the GGRS session
-    commands.start_p2p_session(p2p_session);
 }
 
-fn spawn_player(mut commands: Commands, mut rip: ResMut<RollbackIdProvider>) {
-    // Player 1
+fn spawn_player(mut commands: Commands) {
     commands
         .spawn_bundle(SpriteBundle {
-            transform: Transform::from_translation(Vec3::new(-2., 0., 0.)),
+            transform: Transform::from_translation(Vec3::new(-2., 0., 100.)),
             sprite: Sprite {
                 color: Color::rgb(0., 0.47, 1.),
                 custom_size: Some(Vec2::new(1., 1.)),
@@ -105,30 +73,25 @@ fn spawn_player(mut commands: Commands, mut rip: ResMut<RollbackIdProvider>) {
             },
             ..Default::default()
         })
-        .insert(Player { handle: 0 })
-        .insert(Rollback::new(rip.next_id()));
-
-    // Player 2
-    commands
-        .spawn_bundle(SpriteBundle {
-            transform: Transform::from_translation(Vec3::new(2., 0., 0.)),
-            sprite: Sprite {
-                color: Color::rgb(0., 0.4, 0.),
-                custom_size: Some(Vec2::new(1., 1.)),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .insert(Player { handle: 1 })
-        .insert(Rollback::new(rip.next_id()));
+        .insert(Player);
 }
 
-fn move_players(
-    inputs: Res<Vec<ggrs::GameInput>>,
-    mut player_query: Query<(&mut Transform, &Player)>,
-) {
-    for (mut transform, player) in player_query.iter_mut() {
-        let direction = direction(&inputs[player.handle]);
+fn move_player(keys: Res<Input<KeyCode>>, mut player_query: Query<&mut Transform, With<Player>>) {
+    for mut transform in player_query.iter_mut() {
+        let mut direction = Vec2::ZERO;
+
+        if keys.any_pressed([KeyCode::Up, KeyCode::W]) {
+            direction.y += 1.;
+        }
+        if keys.any_pressed([KeyCode::Down, KeyCode::S]) {
+            direction.y -= 1.;
+        }
+        if keys.any_pressed([KeyCode::Right, KeyCode::D]) {
+            direction.x += 1.;
+        }
+        if keys.any_pressed([KeyCode::Left, KeyCode::A]) {
+            direction.x -= 1.;
+        }
 
         if direction == Vec2::ZERO {
             continue;
@@ -141,21 +104,73 @@ fn move_players(
     }
 }
 
-fn camera_follow(
-    player_handle: Option<Res<LocalPlayerHandle>>,
-    player_query: Query<(&Player, &Transform)>,
-    mut camera_query: Query<&mut Transform, (With<Camera>, Without<Player>)>,
+fn gen_in_radius<R: Rng>(rng: &mut R, center: Vec3, radius: f32, deadzone: f32) -> Vec2 {
+    use std::f32::consts::PI;
+    let [x0, y0, _] = center.to_array();
+    let t = 2.0 * PI * rng.gen_range(0.0..=1.0);
+    let r = radius * rng.gen_range(0.0..=1.0f32).sqrt() + deadzone;
+    let x = x0 + r * t.cos();
+    let y = y0 + r * t.sin();
+    Vec2::new(x, y)
+}
+
+fn spawn_ennemies(
+    time: Res<Time>,
+    mut ennemy_wave_spawned: ResMut<EnnemyWaveSpawned>,
+    player_query: Query<&Transform, With<Player>>,
+    mut commands: Commands,
 ) {
-    let player_handle = match player_handle {
-        Some(handle) => handle.0,
-        None => return, // Session hasn't started yet
+    match time.time_since_startup().as_secs() {
+        2 => {
+            if let EnnemyWaveSpawned(false) = *ennemy_wave_spawned {
+                let mut rng = rand::thread_rng();
+                for player_transform in player_query.iter() {
+                    for i in 0..40 {
+                        let pos = gen_in_radius(&mut rng, player_transform.translation, 10.0, 2.0)
+                            .extend(90.0);
+
+                        commands
+                            .spawn_bundle(SpriteBundle {
+                                transform: Transform::from_translation(pos),
+                                sprite: Sprite {
+                                    color: Color::rgb(0., 0.9, 0.3),
+                                    custom_size: Some(Vec2::new(0.3, 0.3)),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            })
+                            .insert(Ennemy);
+                    }
+                }
+                *ennemy_wave_spawned = EnnemyWaveSpawned(true);
+            }
+        }
+        _ => (),
+    }
+}
+
+fn move_ennemies(
+    time: Res<Time>,
+    player_query: Query<&Transform, With<Player>>,
+    mut ennemies_query: Query<&mut Transform, (With<Ennemy>, Without<Player>)>,
+) {
+    let player_transform = match player_query.iter().next() {
+        Some(transform) => transform,
+        None => return,
     };
 
-    for (player, player_transform) in player_query.iter() {
-        if player.handle != player_handle {
-            continue;
-        }
+    for mut ennemy_transform in ennemies_query.iter_mut() {
+        let direction = player_transform.translation.xy().extend(ennemy_transform.translation.z)
+            - ennemy_transform.translation;
+        ennemy_transform.translation += direction * time.delta_seconds();
+    }
+}
 
+fn camera_follow(
+    player_query: Query<&Transform, With<Player>>,
+    mut camera_query: Query<&mut Transform, (With<Camera>, Without<Player>)>,
+) {
+    for player_transform in player_query.iter() {
         let pos = player_transform.translation;
 
         for mut transform in camera_query.iter_mut() {
@@ -164,3 +179,9 @@ fn camera_follow(
         }
     }
 }
+
+#[derive(Component)]
+pub struct Player;
+
+#[derive(Component)]
+pub struct Ennemy;
