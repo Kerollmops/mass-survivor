@@ -1,12 +1,14 @@
+use std::mem;
+
 use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
 use rand::Rng;
 
 const MAP_SIZE: u32 = 41;
 const GRID_WIDTH: f32 = 0.05;
-const ENNEMIES_SPEED: f32 = 0.9;
-
-struct EnnemyWaveSpawned(bool);
+const SLOW_DOWN: f32 = 0.95;
+const PLAYER_SPEED: f32 = 0.5;
+const ENNEMIES_SPEED: f32 = 0.1;
 
 fn main() {
     App::new()
@@ -15,9 +17,11 @@ fn main() {
         .add_startup_system(setup)
         .add_startup_system(spawn_player)
         .add_system(camera_follow)
-        .add_system(move_player)
         .add_system(spawn_ennemies)
         .add_system(move_ennemies)
+        .add_system(ennemies_repulsion)
+        .add_system(move_player)
+        .add_system(apply_velocity)
         .run();
 }
 
@@ -73,11 +77,12 @@ fn spawn_player(mut commands: Commands) {
             },
             ..Default::default()
         })
+        .insert(Velocity::default())
         .insert(Player);
 }
 
-fn move_player(keys: Res<Input<KeyCode>>, mut player_query: Query<&mut Transform, With<Player>>) {
-    for mut transform in player_query.iter_mut() {
+fn move_player(keys: Res<Input<KeyCode>>, mut player_query: Query<&mut Velocity, With<Player>>) {
+    for mut velocity in player_query.iter_mut() {
         let mut direction = Vec2::ZERO;
 
         if keys.any_pressed([KeyCode::Up, KeyCode::W]) {
@@ -97,10 +102,14 @@ fn move_player(keys: Res<Input<KeyCode>>, mut player_query: Query<&mut Transform
             continue;
         }
 
-        let move_speed = 0.13;
-        let move_delta = (direction * move_speed).extend(0.);
+        velocity.0 += direction * PLAYER_SPEED;
+    }
+}
 
-        transform.translation += move_delta;
+fn apply_velocity(time: Res<Time>, mut transform_query: Query<(&mut Transform, &mut Velocity)>) {
+    for (mut transform, mut velocity) in transform_query.iter_mut() {
+        transform.translation += velocity.0.extend(0.0) * time.delta_seconds();
+        velocity.0 *= SLOW_DOWN;
     }
 }
 
@@ -121,28 +130,26 @@ fn spawn_ennemies(
     mut commands: Commands,
 ) {
     match time.time_since_startup().as_secs() {
-        2 => {
-            if let EnnemyWaveSpawned(false) = *ennemy_wave_spawned {
-                let mut rng = rand::thread_rng();
-                for player_transform in player_query.iter() {
-                    for i in 0..40 {
-                        let pos = gen_in_radius(&mut rng, player_transform.translation, 10.0, 2.0)
-                            .extend(90.0);
+        2 if !ennemy_wave_spawned.spawned() => {
+            let mut rng = rand::thread_rng();
+            for player_transform in player_query.iter() {
+                for i in 0..40 {
+                    let pos = gen_in_radius(&mut rng, player_transform.translation, 10.0, 2.0)
+                        .extend(90.0);
 
-                        commands
-                            .spawn_bundle(SpriteBundle {
-                                transform: Transform::from_translation(pos),
-                                sprite: Sprite {
-                                    color: Color::rgb(0., 0.9, 0.3),
-                                    custom_size: Some(Vec2::new(0.3, 0.3)),
-                                    ..Default::default()
-                                },
+                    commands
+                        .spawn_bundle(SpriteBundle {
+                            transform: Transform::from_translation(pos),
+                            sprite: Sprite {
+                                color: Color::rgb(0., 0.9, 0.3),
+                                custom_size: Some(Vec2::new(0.3, 0.3)),
                                 ..Default::default()
-                            })
-                            .insert(Ennemy);
-                    }
+                            },
+                            ..Default::default()
+                        })
+                        .insert(Velocity::default())
+                        .insert(Ennemy);
                 }
-                *ennemy_wave_spawned = EnnemyWaveSpawned(true);
             }
         }
         _ => (),
@@ -150,19 +157,29 @@ fn spawn_ennemies(
 }
 
 fn move_ennemies(
-    time: Res<Time>,
     player_query: Query<&Transform, With<Player>>,
-    mut ennemies_query: Query<&mut Transform, (With<Ennemy>, Without<Player>)>,
+    mut ennemies_query: Query<(&mut Velocity, &Transform), (With<Ennemy>, Without<Player>)>,
 ) {
     let player_transform = match player_query.iter().next() {
         Some(transform) => transform,
         None => return,
     };
 
-    for mut ennemy_transform in ennemies_query.iter_mut() {
-        let direction = player_transform.translation.xy().extend(ennemy_transform.translation.z)
-            - ennemy_transform.translation;
-        ennemy_transform.translation += direction * time.delta_seconds();
+    for (mut velocity, transform) in ennemies_query.iter_mut() {
+        let direction = player_transform.translation.xy() - transform.translation.xy();
+        velocity.0 += direction * ENNEMIES_SPEED;
+    }
+}
+
+fn ennemies_repulsion(mut ennemies_query: Query<(&mut Velocity, &Transform, &Ennemy)>) {
+    let mut combinations = ennemies_query.iter_combinations_mut();
+    while let Some([(mut avel, atransf, _), (bvel, btransf, _)]) = combinations.fetch_next() {
+        let dist = atransf.translation.distance(btransf.translation);
+        if dist <= 2.0 {
+            let strenght = 2.0 - dist;
+            let dir = (btransf.translation - atransf.translation).normalize_or_zero().xy();
+            avel.0 -= dir * strenght;
+        }
     }
 }
 
@@ -185,3 +202,16 @@ pub struct Player;
 
 #[derive(Component)]
 pub struct Ennemy;
+
+#[derive(Default, Component)]
+pub struct Velocity(Vec2);
+
+pub struct EnnemyWaveSpawned(bool);
+
+impl EnnemyWaveSpawned {
+    /// Set it to `true` and returns the previous value.
+    pub fn spawned(&mut self) -> bool {
+        let EnnemyWaveSpawned(old) = self;
+        mem::replace(old, true)
+    }
+}
