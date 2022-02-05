@@ -10,8 +10,8 @@ const MAP_SIZE: u32 = 41;
 const GRID_WIDTH: f32 = 0.05;
 const SLOW_DOWN: f32 = 0.95;
 const PLAYER_SPEED: f32 = 0.5;
-const ENNEMIES_SPEED: f32 = 0.1;
 const FISH_BASE_ROTATION: f32 = -(5.0 * PI) / 14.0;
+const FISH_SPEED: f32 = 0.1;
 const FISH_MAX_SPEED: f32 = 5.0;
 const DENTURES_BASE_ROTATION: f32 = (7.0 * PI) / 6.0;
 
@@ -124,12 +124,19 @@ fn apply_velocity(time: Res<Time>, mut transform_query: Query<(&mut Transform, &
     }
 }
 
-fn gen_in_radius<R: Rng>(rng: &mut R, center: Vec3, radius: f32, deadzone: f32) -> Vec2 {
+fn random_in_radius<R: Rng>(rng: &mut R, center: Vec3, radius: f32) -> Vec2 {
     let [x0, y0, _] = center.to_array();
     let t = 2.0 * PI * rng.gen_range(0.0..=1.0);
-    let r = radius * rng.gen_range(0.0..=1.0f32).sqrt() + deadzone;
+    let r = radius * rng.gen_range(0.0..=1.0f32).sqrt();
     let x = x0 + r * t.cos();
     let y = y0 + r * t.sin();
+    Vec2::new(x, y)
+}
+
+fn move_from_deadzone(origin: Vec2, deadzone: f32) -> Vec2 {
+    let [x, y] = origin.to_array();
+    let x = if x.is_sign_positive() { x + deadzone } else { x - deadzone };
+    let y = if y.is_sign_positive() { y + deadzone } else { y - deadzone };
     Vec2::new(x, y)
 }
 
@@ -144,9 +151,12 @@ fn spawn_ennemies(
         2 if !ennemy_wave_spawned.spawn(0) => {
             let mut rng = rand::thread_rng();
             for player_transform in player_query.iter() {
+                let origin = Vec2::new(rng.gen_range(-10.0..10.0), rng.gen_range(-10.0..10.0));
+                let origin = move_from_deadzone(origin, 10.0);
+                let offset = player_transform.translation + origin.extend(0.0);
+
                 for _ in 0..40 {
-                    let pos = gen_in_radius(&mut rng, player_transform.translation, 10.0, 2.0)
-                        .extend(90.0);
+                    let pos = random_in_radius(&mut rng, offset, 3.0).extend(90.0);
 
                     commands
                         .spawn_bundle(SpriteSheetBundle {
@@ -203,7 +213,7 @@ fn move_ennemies(
         let ennemy = transform.translation.xy();
         let direction = (player - ennemy).normalize_or_zero();
         let strenght = player.distance(ennemy).min(FISH_MAX_SPEED);
-        velocity.0 += direction * strenght * ENNEMIES_SPEED;
+        velocity.0 += direction * strenght * FISH_SPEED;
 
         let angle = angle_between(ennemy, player);
         if ennemy.x > player.x {
