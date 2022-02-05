@@ -12,6 +12,8 @@ const SLOW_DOWN: f32 = 0.95;
 const PLAYER_SPEED: f32 = 0.5;
 const ENNEMIES_SPEED: f32 = 0.1;
 const FISH_BASE_ROTATION: f32 = -(5.0 * PI) / 14.0;
+const FISH_MAX_SPEED: f32 = 5.0;
+const DENTURES_BASE_ROTATION: f32 = (7.0 * PI) / 6.0;
 
 fn main() {
     let mut app = App::new();
@@ -38,7 +40,7 @@ fn setup(mut commands: Commands) {
     let mut camera_bundle = OrthographicCameraBundle::new_2d();
     camera_bundle.orthographic_projection.scale = 1. / 50.;
     commands.spawn_bundle(camera_bundle);
-    commands.insert_resource(EnnemyWaveSpawned(false));
+    commands.insert_resource(EnnemyWaves::default());
 
     // Horizontal lines
     for i in 0..=MAP_SIZE {
@@ -134,12 +136,12 @@ fn gen_in_radius<R: Rng>(rng: &mut R, center: Vec3, radius: f32, deadzone: f32) 
 fn spawn_ennemies(
     time: Res<Time>,
     iconset_assets: Res<IconsetAssets>,
-    mut ennemy_wave_spawned: ResMut<EnnemyWaveSpawned>,
+    mut ennemy_wave_spawned: ResMut<EnnemyWaves>,
     player_query: Query<&Transform, With<Player>>,
     mut commands: Commands,
 ) {
     match time.time_since_startup().as_secs() {
-        2 if !ennemy_wave_spawned.spawned() => {
+        2 if !ennemy_wave_spawned.spawn(0) => {
             let mut rng = rand::thread_rng();
             for player_transform in player_query.iter() {
                 for _ in 0..40 {
@@ -152,7 +154,7 @@ fn spawn_ennemies(
                                 .with_scale(Vec3::splat(0.02))
                                 .with_rotation(Quat::from_rotation_z(FISH_BASE_ROTATION)),
                             sprite: TextureAtlasSprite::new(162),
-                            texture_atlas: iconset_assets.iconset_standalone.clone(),
+                            texture_atlas: iconset_assets.iconset_fantasy_standalone.clone(),
                             ..Default::default()
                         })
                         .insert(Velocity::default())
@@ -160,6 +162,29 @@ fn spawn_ennemies(
                 }
             }
         }
+        15 if !ennemy_wave_spawned.spawn(1) => {
+            ()
+            // let mut rng = rand::thread_rng();
+            // for player_transform in player_query.iter() {
+            //     for _ in 0..40 {
+            //         let pos = gen_in_radius(&mut rng, player_transform.translation, 10.0, 2.0)
+            //             .extend(90.0);
+
+            //         commands
+            //             .spawn_bundle(SpriteSheetBundle {
+            //                 transform: Transform::from_translation(pos)
+            //                     .with_scale(Vec3::splat(0.02))
+            //                     .with_rotation(Quat::from_rotation_z(DENTURES_BASE_ROTATION)),
+            //                 sprite: TextureAtlasSprite::new(15),
+            //                 texture_atlas: iconset_assets.iconset_halloween_standalone.clone(),
+            //                 ..Default::default()
+            //             })
+            //             .insert(Velocity::default())
+            //             .insert(Ennemy);
+            //     }
+            // }
+        }
+        25 if !ennemy_wave_spawned.spawn(2) => {}
         _ => (),
     }
 }
@@ -177,11 +202,16 @@ fn move_ennemies(
         let player = player_transform.translation.xy();
         let ennemy = transform.translation.xy();
         let direction = (player - ennemy).normalize_or_zero();
-        let strenght = player.distance(ennemy);
+        let strenght = player.distance(ennemy).min(FISH_MAX_SPEED);
         velocity.0 += direction * strenght * ENNEMIES_SPEED;
 
         let angle = angle_between(ennemy, player);
-        transform.rotation = Quat::from_rotation_z(FISH_BASE_ROTATION + angle);
+        if ennemy.x > player.x {
+            transform.rotation = Quat::from_rotation_z(angle - (PI + FISH_BASE_ROTATION))
+                * Quat::from_rotation_y(PI);
+        } else {
+            transform.rotation = Quat::from_rotation_z(angle + FISH_BASE_ROTATION);
+        }
     }
 }
 
@@ -233,13 +263,14 @@ pub struct Ennemy;
 #[derive(Default, Component)]
 pub struct Velocity(Vec2);
 
-pub struct EnnemyWaveSpawned(bool);
+#[derive(Default)]
+pub struct EnnemyWaves([bool; 3]);
 
-impl EnnemyWaveSpawned {
-    /// Set it to `true` and returns the previous value.
-    pub fn spawned(&mut self) -> bool {
-        let EnnemyWaveSpawned(old) = self;
-        mem::replace(old, true)
+impl EnnemyWaves {
+    /// Set the next it to `true` and returns the previous value.
+    pub fn spawn(&mut self, nth: usize) -> bool {
+        let EnnemyWaves(spawned) = self;
+        mem::replace(&mut spawned[nth], true)
     }
 }
 
@@ -247,6 +278,10 @@ impl EnnemyWaveSpawned {
 #[derive(AssetCollection)]
 struct IconsetAssets {
     #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 18, rows = 31))]
-    #[asset(path = "images/iconset_standalone.png")]
-    iconset_standalone: Handle<TextureAtlas>,
+    #[asset(path = "images/iconset_fantasy_standalone.png")]
+    iconset_fantasy_standalone: Handle<TextureAtlas>,
+
+    #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 10, rows = 4))]
+    #[asset(path = "images/iconset_halloween_standalone.png")]
+    iconset_halloween_standalone: Handle<TextureAtlas>,
 }
