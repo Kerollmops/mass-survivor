@@ -1,3 +1,4 @@
+use std::f32::consts::PI;
 use std::mem;
 
 use bevy::math::Vec3Swizzles;
@@ -10,6 +11,7 @@ const GRID_WIDTH: f32 = 0.05;
 const SLOW_DOWN: f32 = 0.95;
 const PLAYER_SPEED: f32 = 0.5;
 const ENNEMIES_SPEED: f32 = 0.1;
+const FISH_BASE_ROTATION: f32 = -(5.0 * PI) / 14.0;
 
 fn main() {
     let mut app = App::new();
@@ -121,7 +123,6 @@ fn apply_velocity(time: Res<Time>, mut transform_query: Query<(&mut Transform, &
 }
 
 fn gen_in_radius<R: Rng>(rng: &mut R, center: Vec3, radius: f32, deadzone: f32) -> Vec2 {
-    use std::f32::consts::PI;
     let [x0, y0, _] = center.to_array();
     let t = 2.0 * PI * rng.gen_range(0.0..=1.0);
     let r = radius * rng.gen_range(0.0..=1.0f32).sqrt() + deadzone;
@@ -141,14 +142,15 @@ fn spawn_ennemies(
         2 if !ennemy_wave_spawned.spawned() => {
             let mut rng = rand::thread_rng();
             for player_transform in player_query.iter() {
-                for i in 0..40 {
+                for _ in 0..40 {
                     let pos = gen_in_radius(&mut rng, player_transform.translation, 10.0, 2.0)
                         .extend(90.0);
 
                     commands
                         .spawn_bundle(SpriteSheetBundle {
                             transform: Transform::from_translation(pos)
-                                .with_scale(Vec3::splat(0.02)),
+                                .with_scale(Vec3::splat(0.02))
+                                .with_rotation(Quat::from_rotation_z(FISH_BASE_ROTATION)),
                             sprite: TextureAtlasSprite::new(162),
                             texture_atlas: iconset_assets.iconset_standalone.clone(),
                             ..Default::default()
@@ -164,25 +166,28 @@ fn spawn_ennemies(
 
 fn move_ennemies(
     player_query: Query<&Transform, With<Player>>,
-    mut ennemies_query: Query<(&mut Velocity, &Transform), (With<Ennemy>, Without<Player>)>,
+    mut ennemies_query: Query<(&mut Velocity, &mut Transform), (With<Ennemy>, Without<Player>)>,
 ) {
     let player_transform = match player_query.iter().next() {
         Some(transform) => transform,
         None => return,
     };
 
-    for (mut velocity, transform) in ennemies_query.iter_mut() {
+    for (mut velocity, mut transform) in ennemies_query.iter_mut() {
         let player = player_transform.translation.xy();
         let ennemy = transform.translation.xy();
-        let direction = player - ennemy;
-        let strenght = player.distance(ennemy) / 10.0;
+        let direction = (player - ennemy).normalize_or_zero();
+        let strenght = player.distance(ennemy);
         velocity.0 += direction * strenght * ENNEMIES_SPEED;
+
+        let angle = angle_between(ennemy, player);
+        transform.rotation = Quat::from_rotation_z(FISH_BASE_ROTATION + angle);
     }
 }
 
 fn ennemies_repulsion(mut ennemies_query: Query<(&mut Velocity, &Transform, &Ennemy)>) {
     let mut combinations = ennemies_query.iter_combinations_mut();
-    while let Some([(mut avel, atransf, _), (bvel, btransf, _)]) = combinations.fetch_next() {
+    while let Some([(mut avel, atransf, _), (_, btransf, _)]) = combinations.fetch_next() {
         let dist = atransf.translation.distance(btransf.translation);
         if dist <= 2.0 {
             let strenght = 2.0 - dist;
@@ -204,6 +209,13 @@ fn camera_follow(
             transform.translation.y = pos.y;
         }
     }
+}
+
+/// returns the angle between 2 points in radians
+fn angle_between(a: Vec2, b: Vec2) -> f32 {
+    let [ax, ay] = a.to_array();
+    let [bx, by] = b.to_array();
+    (by - ay).atan2(bx - ax)
 }
 
 #[derive(Clone, Eq, PartialEq, Debug, Hash)]
