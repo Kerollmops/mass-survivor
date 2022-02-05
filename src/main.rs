@@ -40,6 +40,8 @@ fn main() {
         .add_system_set(
             SystemSet::on_update(MyStates::Next)
                 .with_system(spawn_ennemies)
+                .with_system(create_loot) // Put the loot on the floor
+                .with_system(player_loot_stuff)
                 .with_system(axe_head_touch_ennemies), // Kill ennemies touched by axe head and spawn gems
         )
         // Apply the velocity to the transforms
@@ -64,6 +66,7 @@ fn setup(mut commands: Commands) {
     camera_bundle.orthographic_projection.scale = 1. / 50.;
     commands.spawn_bundle(camera_bundle);
     commands.insert_resource(EnnemyWaves::default());
+    commands.insert_resource(LootAllGemsFor(Timer::from_seconds(0., false)));
 
     // Horizontal lines
     for i in 0..=MAP_SIZE {
@@ -223,6 +226,55 @@ fn player_loot_gems(
     }
 }
 
+fn create_loot(
+    mut commands: Commands,
+    iconset_assets: Res<IconsetAssets>,
+    mut player_query: Query<(&mut Player, &Transform)>,
+) {
+    let (mut player, transform) = match player_query.iter_mut().next() {
+        Some(value) => value,
+        None => return,
+    };
+
+    let mut rng = rand::thread_rng();
+    if !player.lvl1_stuff_generated && player.xp >= 30 {
+        player.lvl1_stuff_generated = true;
+        let pos = random_in_radius(&mut rng, transform.translation, 5., 3.).extend(95.);
+        commands
+            .spawn_bundle(SpriteSheetBundle {
+                transform: Transform::from_translation(pos).with_scale(Vec3::splat(0.04)),
+                sprite: TextureAtlasSprite::new(864),
+                texture_atlas: iconset_assets.iconset_fantasy_castshadows.clone(),
+                ..Default::default()
+            })
+            .insert(CollisionShape::new_rectangle(0.04, 0.04))
+            .insert(Stuff::FishingRod);
+    }
+}
+
+fn player_loot_stuff(
+    mut commands: Commands,
+    mut loot_all_gems: ResMut<LootAllGemsFor>,
+    mut player_query: Query<(&mut Player, &CollisionShape)>,
+    stuff_query: Query<(Entity, &Stuff, &CollisionShape)>,
+) {
+    let (_player, player_shape) = match player_query.iter_mut().next() {
+        Some(value) => value,
+        None => return,
+    };
+
+    for (stuff_entity, stuff, shape) in stuff_query.iter() {
+        if shape.is_collided_with(player_shape) {
+            match stuff {
+                Stuff::FishingRod => {
+                    *loot_all_gems = LootAllGemsFor(Timer::from_seconds(2., false))
+                }
+            }
+            commands.entity(stuff_entity).despawn();
+        }
+    }
+}
+
 fn axe_head_touch_ennemies(
     mut commands: Commands,
     iconset_assets: Res<IconsetAssets>,
@@ -247,17 +299,18 @@ fn axe_head_touch_ennemies(
                 })
                 .insert(CollisionShape::new_rectangle(0.04, 0.04))
                 .insert(Velocity::default())
+                .insert(MoveToPlayer::default())
                 .insert(Gem);
         }
     }
 }
 
-fn random_in_radius<R: Rng>(rng: &mut R, center: Vec3, radius: f32) -> Vec2 {
+fn random_in_radius<R: Rng>(rng: &mut R, center: Vec3, radius: f32, deadzone: f32) -> Vec2 {
     let [x0, y0, _] = center.to_array();
     let t = 2.0 * PI * rng.gen_range(0.0..=1.0);
     let r = radius * rng.gen_range(0.0..=1.0f32).sqrt();
-    let x = x0 + r * t.cos();
-    let y = y0 + r * t.sin();
+    let x = x0 + r * t.cos() + deadzone;
+    let y = y0 + r * t.sin() + deadzone;
     Vec2::new(x, y)
 }
 
@@ -284,7 +337,7 @@ fn spawn_ennemies(
                 let offset = player_transform.translation + origin.extend(0.0);
 
                 for _ in 0..40 {
-                    let pos = random_in_radius(&mut rng, offset, 3.0).extend(90.0);
+                    let pos = random_in_radius(&mut rng, offset, 3., 0.).extend(90.);
 
                     commands
                         .spawn_bundle(SpriteSheetBundle {
@@ -310,7 +363,7 @@ fn spawn_ennemies(
                     let offset = player_transform.translation + origin.extend(0.0);
 
                     for _ in 0..60 {
-                        let pos = random_in_radius(&mut rng, offset, 3.0).extend(90.0);
+                        let pos = random_in_radius(&mut rng, offset, 3., 0.).extend(90.0);
 
                         commands
                             .spawn_bundle(SpriteSheetBundle {
@@ -337,7 +390,7 @@ fn spawn_ennemies(
                     let offset = player_transform.translation + origin.extend(0.0);
 
                     for _ in 0..60 {
-                        let pos = random_in_radius(&mut rng, offset, 3.0).extend(90.0);
+                        let pos = random_in_radius(&mut rng, offset, 3., 0.).extend(90.0);
 
                         commands
                             .spawn_bundle(SpriteSheetBundle {
@@ -411,17 +464,21 @@ fn gems_repulsion(mut gems_query: Query<(&mut Velocity, &Transform, &Gem)>) {
 
 fn gems_player_attraction(
     time: Res<Time>,
+    mut loot_all_gems: ResMut<LootAllGemsFor>,
     player_query: Query<&Transform, With<Player>>,
-    mut gems_query: Query<&mut Transform, (With<Gem>, Without<Player>)>,
+    mut gems_query: Query<(&mut Transform, &mut MoveToPlayer), (With<Gem>, Without<Player>)>,
 ) {
     let player_transform = match player_query.iter().next() {
         Some(transform) => transform,
         None => return,
     };
 
-    for mut transform in gems_query.iter_mut() {
+    loot_all_gems.0.tick(time.delta());
+
+    for (mut transform, mut move_to_player) in gems_query.iter_mut() {
         let dist = player_transform.translation.xy().distance(transform.translation.xy());
-        if dist <= 2.0 {
+        if move_to_player.0 || !loot_all_gems.0.finished() || dist <= 2.0 {
+            move_to_player.0 = true;
             let dir = (player_transform.translation.xy() - transform.translation.xy())
                 .normalize_or_zero();
             transform.translation += (dir * time.delta_seconds() * 15.0).extend(0.);
@@ -458,6 +515,7 @@ enum MyStates {
 
 #[derive(Default, Component)]
 pub struct Player {
+    lvl1_stuff_generated: bool,
     xp: usize,
 }
 
@@ -468,7 +526,15 @@ pub struct Ennemy;
 pub struct Gem;
 
 #[derive(Component)]
+pub enum Stuff {
+    FishingRod,
+}
+
+#[derive(Component)]
 pub struct AxeHead;
+
+#[derive(Component)]
+pub struct LootAllGemsFor(Timer);
 
 #[derive(Component)]
 pub struct RotationRadian(f32);
@@ -478,6 +544,9 @@ pub struct Velocity(Vec2);
 
 #[derive(Default)]
 pub struct EnnemyWaves([bool; 3]);
+
+#[derive(Default, Component)]
+pub struct MoveToPlayer(bool);
 
 impl EnnemyWaves {
     /// Set the next it to `true` and returns the previous value.
@@ -490,9 +559,14 @@ impl EnnemyWaves {
 // fish 162-165
 #[derive(AssetCollection)]
 struct IconsetAssets {
-    #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 18, rows = 31))]
+    #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 18, rows = 50))]
     #[asset(path = "images/iconset_fantasy_standalone.png")]
     iconset_fantasy_standalone: Handle<TextureAtlas>,
+
+    #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 18, rows = 50))]
+    #[asset(path = "images/iconset_fantasy_castshadows.png")]
+    iconset_fantasy_castshadows: Handle<TextureAtlas>,
+
     #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 10, rows = 4))]
     #[asset(path = "images/iconset_halloween_standalone.png")]
     iconset_halloween_standalone: Handle<TextureAtlas>,
