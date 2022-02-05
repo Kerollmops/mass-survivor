@@ -40,7 +40,7 @@ fn main() {
         .add_system_set(
             SystemSet::on_update(MyStates::Next)
                 .with_system(spawn_ennemies)
-                .with_system(axe_head_touch_ennemies), // Kill ennemies touched by axe head
+                .with_system(axe_head_touch_ennemies), // Kill ennemies touched by axe head and spawn gems
         )
         // Apply the velocity to the transforms
         .add_system_to_stage(CoreStage::PostUpdate, move_ennemies.chain(apply_velocity))
@@ -50,8 +50,10 @@ fn main() {
             update_shape_transforms // First update transforms
                 .chain(rotate_axe_head) // Rotate the axe around the player
                 .chain(change_player_color) // Change the colors
-                .chain(ennemies_repulsion) // Then repulse ennemies
-                .chain(gems_repulsion) // Then repulse gems between each others
+                .chain(player_loot_gems) // Remove and increment player XP
+                .chain(ennemies_repulsion) // Repulse ennemies
+                .chain(gems_repulsion) // Repulse gems
+                .chain(gems_player_attraction) // Player attract gems in vicinity
                 .after(TransformSystem::TransformPropagate), // Better to consider the up-to-date transforms
         )
         .run();
@@ -111,7 +113,7 @@ fn spawn_player(mut commands: Commands) {
         })
         .insert(Velocity::default())
         .insert(CollisionShape::new_rectangle(1., 1.))
-        .insert(Player)
+        .insert(Player::default())
         .with_children(|parent| {
             parent
                 .spawn_bundle(SpriteBundle {
@@ -203,6 +205,24 @@ fn change_player_color(
     }
 }
 
+fn player_loot_gems(
+    mut commands: Commands,
+    mut player_query: Query<(&mut Player, &CollisionShape)>,
+    gems_query: Query<(Entity, &CollisionShape), With<Gem>>,
+) {
+    let (mut player, player_shape) = match player_query.iter_mut().next() {
+        Some(value) => value,
+        None => return,
+    };
+
+    for (gem_entity, shape) in gems_query.iter() {
+        if shape.is_collided_with(player_shape) {
+            player.xp += 1;
+            commands.entity(gem_entity).despawn();
+        }
+    }
+}
+
 fn axe_head_touch_ennemies(
     mut commands: Commands,
     iconset_assets: Res<IconsetAssets>,
@@ -221,7 +241,7 @@ fn axe_head_touch_ennemies(
             commands
                 .spawn_bundle(SpriteSheetBundle {
                     transform: Transform::from_translation(pos).with_scale(Vec3::splat(0.015)),
-                    sprite: TextureAtlasSprite::new(468),
+                    sprite: TextureAtlasSprite::new(474),
                     texture_atlas: iconset_assets.iconset_fantasy_standalone.clone(),
                     ..Default::default()
                 })
@@ -281,8 +301,60 @@ fn spawn_ennemies(
                 }
             }
         }
-        15 if !ennemy_wave_spawned.spawn(1) => (),
-        25 if !ennemy_wave_spawned.spawn(2) => (),
+        15 if !ennemy_wave_spawned.spawn(1) => {
+            let mut rng = rand::thread_rng();
+            for player_transform in player_query.iter() {
+                for _ in 0..2 {
+                    let origin = Vec2::new(rng.gen_range(-10.0..10.0), rng.gen_range(-10.0..10.0));
+                    let origin = move_from_deadzone(origin, 10.0);
+                    let offset = player_transform.translation + origin.extend(0.0);
+
+                    for _ in 0..60 {
+                        let pos = random_in_radius(&mut rng, offset, 3.0).extend(90.0);
+
+                        commands
+                            .spawn_bundle(SpriteSheetBundle {
+                                transform: Transform::from_translation(pos)
+                                    .with_scale(Vec3::splat(0.04))
+                                    .with_rotation(Quat::from_rotation_z(FISH_BASE_ROTATION)),
+                                sprite: TextureAtlasSprite::new(165),
+                                texture_atlas: iconset_assets.iconset_fantasy_standalone.clone(),
+                                ..Default::default()
+                            })
+                            .insert(Velocity::default())
+                            .insert(CollisionShape::new_rectangle(0.08, 0.08))
+                            .insert(Ennemy);
+                    }
+                }
+            }
+        }
+        25 if !ennemy_wave_spawned.spawn(2) => {
+            let mut rng = rand::thread_rng();
+            for player_transform in player_query.iter() {
+                for _ in 0..3 {
+                    let origin = Vec2::new(rng.gen_range(-10.0..10.0), rng.gen_range(-10.0..10.0));
+                    let origin = move_from_deadzone(origin, 10.0);
+                    let offset = player_transform.translation + origin.extend(0.0);
+
+                    for _ in 0..60 {
+                        let pos = random_in_radius(&mut rng, offset, 3.0).extend(90.0);
+
+                        commands
+                            .spawn_bundle(SpriteSheetBundle {
+                                transform: Transform::from_translation(pos)
+                                    .with_scale(Vec3::splat(0.02))
+                                    .with_rotation(Quat::from_rotation_z(FISH_BASE_ROTATION)),
+                                sprite: TextureAtlasSprite::new(26),
+                                texture_atlas: iconset_assets.iconset_halloween_standalone.clone(),
+                                ..Default::default()
+                            })
+                            .insert(Velocity::default())
+                            .insert(CollisionShape::new_rectangle(0.04, 0.04))
+                            .insert(Ennemy);
+                    }
+                }
+            }
+        }
         _ => (),
     }
 }
@@ -316,10 +388,10 @@ fn move_ennemies(
 fn ennemies_repulsion(mut ennemies_query: Query<(&mut Velocity, &Transform, &Ennemy)>) {
     let mut combinations = ennemies_query.iter_combinations_mut();
     while let Some([(mut avel, atransf, _), (_, btransf, _)]) = combinations.fetch_next() {
-        let dist = atransf.translation.distance(btransf.translation);
+        let dist = atransf.translation.xy().distance(btransf.translation.xy());
         if dist <= 2.0 {
             let strenght = 2.0 - dist;
-            let dir = (btransf.translation - atransf.translation).normalize_or_zero().xy();
+            let dir = (btransf.translation.xy() - atransf.translation.xy()).normalize_or_zero();
             avel.0 -= dir * (strenght / 50.0);
         }
     }
@@ -328,11 +400,31 @@ fn ennemies_repulsion(mut ennemies_query: Query<(&mut Velocity, &Transform, &Enn
 fn gems_repulsion(mut gems_query: Query<(&mut Velocity, &Transform, &Gem)>) {
     let mut combinations = gems_query.iter_combinations_mut();
     while let Some([(mut avel, atransf, _), (_, btransf, _)]) = combinations.fetch_next() {
-        let dist = atransf.translation.distance(btransf.translation);
+        let dist = atransf.translation.xy().distance(btransf.translation.xy());
         if dist <= 0.3 {
             let strenght = 2.0 - dist;
-            let dir = (btransf.translation - atransf.translation).normalize_or_zero().xy();
+            let dir = (btransf.translation.xy() - atransf.translation.xy()).normalize_or_zero();
             avel.0 -= dir * (strenght / 100.0);
+        }
+    }
+}
+
+fn gems_player_attraction(
+    time: Res<Time>,
+    player_query: Query<&Transform, With<Player>>,
+    mut gems_query: Query<&mut Transform, (With<Gem>, Without<Player>)>,
+) {
+    let player_transform = match player_query.iter().next() {
+        Some(transform) => transform,
+        None => return,
+    };
+
+    for mut transform in gems_query.iter_mut() {
+        let dist = player_transform.translation.xy().distance(transform.translation.xy());
+        if dist <= 2.0 {
+            let dir = (player_transform.translation.xy() - transform.translation.xy())
+                .normalize_or_zero();
+            transform.translation += (dir * time.delta_seconds() * 15.0).extend(0.);
         }
     }
 }
@@ -364,8 +456,10 @@ enum MyStates {
     Next,
 }
 
-#[derive(Component)]
-pub struct Player;
+#[derive(Default, Component)]
+pub struct Player {
+    xp: usize,
+}
 
 #[derive(Component)]
 pub struct Ennemy;
@@ -399,7 +493,7 @@ struct IconsetAssets {
     #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 18, rows = 31))]
     #[asset(path = "images/iconset_fantasy_standalone.png")]
     iconset_fantasy_standalone: Handle<TextureAtlas>,
-    // #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 10, rows = 4))]
-    // #[asset(path = "images/iconset_halloween_standalone.png")]
-    // iconset_halloween_standalone: Handle<TextureAtlas>,
+    #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 10, rows = 4))]
+    #[asset(path = "images/iconset_halloween_standalone.png")]
+    iconset_halloween_standalone: Handle<TextureAtlas>,
 }
