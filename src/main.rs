@@ -3,7 +3,9 @@ use std::mem;
 
 use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
+use bevy::transform::TransformSystem;
 use bevy_asset_loader::{AssetCollection, AssetLoader};
+use impacted::CollisionShape;
 use rand::Rng;
 
 const MAP_SIZE: u32 = 41;
@@ -13,6 +15,11 @@ const PLAYER_SPEED: f32 = 0.5;
 const FISH_BASE_ROTATION: f32 = -(5.0 * PI) / 14.0;
 const FISH_SPEED: f32 = 0.1;
 const FISH_MAX_SPEED: f32 = 5.0;
+
+const HEALTHY_PLAYER_COLOR: Color = Color::rgb(0., 0.47, 1.);
+const HIT_PLAYER_COLOR: Color = Color::rgb(0.9, 0.027, 0.);
+
+const AXE_COLOR: Color = Color::rgb(0.376, 0.8, 0.);
 
 fn main() {
     let mut app = App::new();
@@ -26,12 +33,22 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .add_startup_system(setup)
         .add_startup_system(spawn_player)
-        .add_system_set(SystemSet::on_update(MyStates::Next).with_system(camera_follow))
+        // Player movement and camera tracking
+        .add_system_to_stage(CoreStage::PostUpdate, move_player.chain(camera_follow))
+        // Ennemies spawning
         .add_system_set(SystemSet::on_update(MyStates::Next).with_system(spawn_ennemies))
-        .add_system_set(SystemSet::on_update(MyStates::Next).with_system(move_ennemies))
-        .add_system_set(SystemSet::on_update(MyStates::Next).with_system(ennemies_repulsion))
-        .add_system_set(SystemSet::on_update(MyStates::Next).with_system(move_player))
-        .add_system_set(SystemSet::on_update(MyStates::Next).with_system(apply_velocity))
+        // Apply the velocity to the transforms
+        .add_system_to_stage(CoreStage::PostUpdate, move_ennemies.chain(apply_velocity))
+        // Collision detection
+        .add_system_to_stage(
+            CoreStage::PostUpdate,
+            update_shape_transforms // First update transforms
+                .chain(rotate_axe_head) // Rotate the axe around the player
+                .chain(change_player_color) // Change the colors
+                .chain(axe_head_touch_ennemies) // Kill ennemies touched by axe head
+                .chain(ennemies_repulsion) // Then repulse ennemies
+                .after(TransformSystem::TransformPropagate), // Better to consider the up-to-date transforms
+        )
         .run();
 }
 
@@ -79,16 +96,32 @@ fn setup(mut commands: Commands) {
 fn spawn_player(mut commands: Commands) {
     commands
         .spawn_bundle(SpriteBundle {
-            transform: Transform::from_translation(Vec3::new(-2., 0., 100.)),
+            transform: Transform::from_translation(Vec3::new(0., 0., 100.)),
             sprite: Sprite {
-                color: Color::rgb(0., 0.47, 1.),
+                color: HEALTHY_PLAYER_COLOR,
                 custom_size: Some(Vec2::new(1., 1.)),
                 ..Default::default()
             },
             ..Default::default()
         })
         .insert(Velocity::default())
-        .insert(Player);
+        .insert(CollisionShape::new_rectangle(1., 1.))
+        .insert(Player)
+        .with_children(|parent| {
+            parent
+                .spawn_bundle(SpriteBundle {
+                    transform: Transform::from_translation(Vec3::new(0., -3., 0.)),
+                    sprite: Sprite {
+                        color: AXE_COLOR,
+                        custom_size: Some(Vec2::new(0.8, 0.8)),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .insert(CollisionShape::new_circle(0.7))
+                .insert(RotationRadian(0.))
+                .insert(AxeHead);
+        });
 }
 
 fn move_player(keys: Res<Input<KeyCode>>, mut player_query: Query<&mut Velocity, With<Player>>) {
@@ -120,6 +153,67 @@ fn apply_velocity(time: Res<Time>, mut transform_query: Query<(&mut Transform, &
     for (mut transform, mut velocity) in transform_query.iter_mut() {
         transform.translation += velocity.0.extend(0.0) * time.delta_seconds();
         velocity.0 *= SLOW_DOWN;
+    }
+}
+
+/// Update the `CollisionShape` transform if the `GlobalTransform` has changed
+fn update_shape_transforms(
+    mut shapes: Query<(&mut CollisionShape, &GlobalTransform), Changed<GlobalTransform>>,
+) {
+    for (mut shape, transform) in shapes.iter_mut() {
+        shape.set_transform(*transform);
+    }
+}
+
+fn rotate_axe_head(
+    time: Res<Time>,
+    mut axe_head_query: Query<(&mut Transform, &mut RotationRadian), With<AxeHead>>,
+) {
+    let axe_head_speed = 2.; // radian/s
+
+    let (mut transform, mut rotation) = match axe_head_query.iter_mut().next() {
+        Some(transform) => transform,
+        None => return,
+    };
+
+    let radian = rotation.0 + axe_head_speed * time.delta_seconds();
+    rotation.0 = if radian >= 2. * PI { 0. } else { radian };
+
+    let x = rotation.0.cos() * 3.;
+    let y = rotation.0.sin() * 3.;
+    transform.translation = Vec3::new(x, y, 0.);
+}
+
+fn change_player_color(
+    mut player_query: Query<(&mut Sprite, &CollisionShape), With<Player>>,
+    ennemies_query: Query<&CollisionShape, With<Ennemy>>,
+) {
+    let (mut player_sprite, player_shape) = match player_query.iter_mut().next() {
+        Some(value) => value,
+        None => return,
+    };
+
+    if ennemies_query.iter().any(|shape| shape.is_collided_with(player_shape)) {
+        player_sprite.color = HIT_PLAYER_COLOR;
+    } else {
+        player_sprite.color = HEALTHY_PLAYER_COLOR;
+    }
+}
+
+fn axe_head_touch_ennemies(
+    mut commands: Commands,
+    axe_head_query: Query<&CollisionShape, With<AxeHead>>,
+    ennemies_query: Query<(Entity, &CollisionShape), With<Ennemy>>,
+) {
+    let axe_head_shape = match axe_head_query.iter().next() {
+        Some(shape) => shape,
+        None => return,
+    };
+
+    for (entity, shape) in ennemies_query.iter() {
+        if shape.is_collided_with(axe_head_shape) {
+            commands.entity(entity).despawn();
+        }
     }
 }
 
@@ -167,6 +261,7 @@ fn spawn_ennemies(
                             ..Default::default()
                         })
                         .insert(Velocity::default())
+                        .insert(CollisionShape::new_rectangle(0.04, 0.04))
                         .insert(Ennemy);
                 }
             }
@@ -247,6 +342,12 @@ pub struct Player;
 
 #[derive(Component)]
 pub struct Ennemy;
+
+#[derive(Component)]
+pub struct AxeHead;
+
+#[derive(Component)]
+pub struct RotationRadian(f32);
 
 #[derive(Default, Component)]
 pub struct Velocity(Vec2);
