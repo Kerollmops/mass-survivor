@@ -10,7 +10,7 @@ use rand::Rng;
 
 const MAP_SIZE: u32 = 41;
 const GRID_WIDTH: f32 = 0.05;
-const SLOW_DOWN: f32 = 0.95;
+const SLOW_DOWN: f32 = 57.;
 const PLAYER_SPEED: f32 = 0.5;
 const FISH_BASE_ROTATION: f32 = -(5.0 * PI) / 14.0;
 const FISH_SPEED: f32 = 0.1;
@@ -159,7 +159,7 @@ fn move_player(keys: Res<Input<KeyCode>>, mut player_query: Query<&mut Velocity,
 fn apply_velocity(time: Res<Time>, mut transform_query: Query<(&mut Transform, &mut Velocity)>) {
     for (mut transform, mut velocity) in transform_query.iter_mut() {
         transform.translation += velocity.0.extend(0.0) * time.delta_seconds();
-        velocity.0 *= SLOW_DOWN;
+        velocity.0 *= time.delta_seconds() * SLOW_DOWN;
     }
 }
 
