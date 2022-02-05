@@ -19,7 +19,8 @@ const FISH_MAX_SPEED: f32 = 5.0;
 const HEALTHY_PLAYER_COLOR: Color = Color::rgb(0., 0.47, 1.);
 const HIT_PLAYER_COLOR: Color = Color::rgb(0.9, 0.027, 0.);
 
-const AXE_COLOR: Color = Color::rgb(0.376, 0.8, 0.);
+const AXE_HEAD_COLOR: Color = Color::rgb(0.376, 0.8, 0.);
+const AXE_HEAD_SPEED: f32 = 2.; // radian/s
 
 fn main() {
     let mut app = App::new();
@@ -36,7 +37,11 @@ fn main() {
         // Player movement and camera tracking
         .add_system_to_stage(CoreStage::PostUpdate, move_player.chain(camera_follow))
         // Ennemies spawning
-        .add_system_set(SystemSet::on_update(MyStates::Next).with_system(spawn_ennemies))
+        .add_system_set(
+            SystemSet::on_update(MyStates::Next)
+                .with_system(spawn_ennemies)
+                .with_system(axe_head_touch_ennemies), // Kill ennemies touched by axe head
+        )
         // Apply the velocity to the transforms
         .add_system_to_stage(CoreStage::PostUpdate, move_ennemies.chain(apply_velocity))
         // Collision detection
@@ -45,8 +50,8 @@ fn main() {
             update_shape_transforms // First update transforms
                 .chain(rotate_axe_head) // Rotate the axe around the player
                 .chain(change_player_color) // Change the colors
-                .chain(axe_head_touch_ennemies) // Kill ennemies touched by axe head
                 .chain(ennemies_repulsion) // Then repulse ennemies
+                .chain(gems_repulsion) // Then repulse gems between each others
                 .after(TransformSystem::TransformPropagate), // Better to consider the up-to-date transforms
         )
         .run();
@@ -112,7 +117,7 @@ fn spawn_player(mut commands: Commands) {
                 .spawn_bundle(SpriteBundle {
                     transform: Transform::from_translation(Vec3::new(0., -3., 0.)),
                     sprite: Sprite {
-                        color: AXE_COLOR,
+                        color: AXE_HEAD_COLOR,
                         custom_size: Some(Vec2::new(0.8, 0.8)),
                         ..Default::default()
                     },
@@ -169,14 +174,12 @@ fn rotate_axe_head(
     time: Res<Time>,
     mut axe_head_query: Query<(&mut Transform, &mut RotationRadian), With<AxeHead>>,
 ) {
-    let axe_head_speed = 2.; // radian/s
-
     let (mut transform, mut rotation) = match axe_head_query.iter_mut().next() {
         Some(transform) => transform,
         None => return,
     };
 
-    let radian = rotation.0 + axe_head_speed * time.delta_seconds();
+    let radian = rotation.0 + AXE_HEAD_SPEED * time.delta_seconds();
     rotation.0 = if radian >= 2. * PI { 0. } else { radian };
 
     let x = rotation.0.cos() * 3.;
@@ -202,17 +205,29 @@ fn change_player_color(
 
 fn axe_head_touch_ennemies(
     mut commands: Commands,
+    iconset_assets: Res<IconsetAssets>,
     axe_head_query: Query<&CollisionShape, With<AxeHead>>,
-    ennemies_query: Query<(Entity, &CollisionShape), With<Ennemy>>,
+    ennemies_query: Query<(Entity, &Transform, &CollisionShape), With<Ennemy>>,
 ) {
     let axe_head_shape = match axe_head_query.iter().next() {
         Some(shape) => shape,
         None => return,
     };
 
-    for (entity, shape) in ennemies_query.iter() {
+    for (entity, transform, shape) in ennemies_query.iter() {
         if shape.is_collided_with(axe_head_shape) {
+            let pos = transform.translation.xy().extend(80.0);
             commands.entity(entity).despawn();
+            commands
+                .spawn_bundle(SpriteSheetBundle {
+                    transform: Transform::from_translation(pos).with_scale(Vec3::splat(0.015)),
+                    sprite: TextureAtlasSprite::new(468),
+                    texture_atlas: iconset_assets.iconset_fantasy_standalone.clone(),
+                    ..Default::default()
+                })
+                .insert(CollisionShape::new_rectangle(0.04, 0.04))
+                .insert(Velocity::default())
+                .insert(Gem);
         }
     }
 }
@@ -310,6 +325,18 @@ fn ennemies_repulsion(mut ennemies_query: Query<(&mut Velocity, &Transform, &Enn
     }
 }
 
+fn gems_repulsion(mut gems_query: Query<(&mut Velocity, &Transform, &Gem)>) {
+    let mut combinations = gems_query.iter_combinations_mut();
+    while let Some([(mut avel, atransf, _), (_, btransf, _)]) = combinations.fetch_next() {
+        let dist = atransf.translation.distance(btransf.translation);
+        if dist <= 0.3 {
+            let strenght = 2.0 - dist;
+            let dir = (btransf.translation - atransf.translation).normalize_or_zero().xy();
+            avel.0 -= dir * (strenght / 100.0);
+        }
+    }
+}
+
 fn camera_follow(
     player_query: Query<&Transform, With<Player>>,
     mut camera_query: Query<&mut Transform, (With<Camera>, Without<Player>)>,
@@ -342,6 +369,9 @@ pub struct Player;
 
 #[derive(Component)]
 pub struct Ennemy;
+
+#[derive(Component)]
+pub struct Gem;
 
 #[derive(Component)]
 pub struct AxeHead;
