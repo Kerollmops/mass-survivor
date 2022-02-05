@@ -13,7 +13,6 @@ const PLAYER_SPEED: f32 = 0.5;
 const FISH_BASE_ROTATION: f32 = -(5.0 * PI) / 14.0;
 const FISH_SPEED: f32 = 0.1;
 const FISH_MAX_SPEED: f32 = 5.0;
-const DENTURES_BASE_ROTATION: f32 = (7.0 * PI) / 6.0;
 
 fn main() {
     let mut app = App::new();
@@ -172,29 +171,8 @@ fn spawn_ennemies(
                 }
             }
         }
-        15 if !ennemy_wave_spawned.spawn(1) => {
-            ()
-            // let mut rng = rand::thread_rng();
-            // for player_transform in player_query.iter() {
-            //     for _ in 0..40 {
-            //         let pos = gen_in_radius(&mut rng, player_transform.translation, 10.0, 2.0)
-            //             .extend(90.0);
-
-            //         commands
-            //             .spawn_bundle(SpriteSheetBundle {
-            //                 transform: Transform::from_translation(pos)
-            //                     .with_scale(Vec3::splat(0.02))
-            //                     .with_rotation(Quat::from_rotation_z(DENTURES_BASE_ROTATION)),
-            //                 sprite: TextureAtlasSprite::new(15),
-            //                 texture_atlas: iconset_assets.iconset_halloween_standalone.clone(),
-            //                 ..Default::default()
-            //             })
-            //             .insert(Velocity::default())
-            //             .insert(Ennemy);
-            //     }
-            // }
-        }
-        25 if !ennemy_wave_spawned.spawn(2) => {}
+        15 if !ennemy_wave_spawned.spawn(1) => (),
+        25 if !ennemy_wave_spawned.spawn(2) => (),
         _ => (),
     }
 }
@@ -251,7 +229,7 @@ fn camera_follow(
     }
 }
 
-/// returns the angle between 2 points in radians
+/// Returns the angle between 2 points in radians
 fn angle_between(a: Vec2, b: Vec2) -> f32 {
     let [ax, ay] = a.to_array();
     let [bx, by] = b.to_array();
@@ -290,8 +268,7 @@ struct IconsetAssets {
     #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 18, rows = 31))]
     #[asset(path = "images/iconset_fantasy_standalone.png")]
     iconset_fantasy_standalone: Handle<TextureAtlas>,
-
-    #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 10, rows = 4))]
-    #[asset(path = "images/iconset_halloween_standalone.png")]
-    iconset_halloween_standalone: Handle<TextureAtlas>,
+    // #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 10, rows = 4))]
+    // #[asset(path = "images/iconset_halloween_standalone.png")]
+    // iconset_halloween_standalone: Handle<TextureAtlas>,
 }
