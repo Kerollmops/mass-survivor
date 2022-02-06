@@ -1,5 +1,4 @@
 use std::f32::consts::PI;
-use std::mem;
 
 use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
@@ -9,10 +8,12 @@ use impacted::CollisionShape;
 use rand::Rng;
 
 use self::assets::*;
+use self::ennemies::*;
 use self::game_sprites::*;
 use self::helper::*;
 
 mod assets;
+mod ennemies;
 mod game_sprites;
 mod helper;
 
@@ -20,8 +21,6 @@ const MAP_SIZE: u32 = 41;
 const GRID_WIDTH: f32 = 0.05;
 const SLOW_DOWN: f32 = 4.0;
 const PLAYER_SPEED: f32 = 0.5;
-const FISH_SPEED: f32 = 0.1;
-const FISH_MAX_SPEED: f32 = 5.0;
 
 const HEALTHY_PLAYER_COLOR: Color = Color::rgb(0., 0.47, 1.);
 const HIT_PLAYER_COLOR: Color = Color::rgb(0.9, 0.027, 0.);
@@ -42,17 +41,20 @@ fn main() {
         .add_startup_system(setup)
         .add_startup_system(spawn_player)
         // Player movement and camera tracking
-        .add_system_to_stage(CoreStage::PostUpdate, move_player.chain(camera_follow))
+        .add_system_to_stage(
+            CoreStage::PostUpdate,
+            move_player.chain(slow_walking_movement).chain(running_movement).chain(camera_follow),
+        )
         // Ennemies spawning
         .add_system_set(
             SystemSet::on_update(MyStates::Next)
-                .with_system(spawn_ennemies)
+                .with_system(spawn_ennemy_waves)
                 .with_system(create_loot) // Put the loot on the floor
                 .with_system(player_loot_stuff)
                 .with_system(axe_head_touch_ennemies), // Kill ennemies touched by axe head and spawn gems
         )
         // Apply the velocity to the transforms
-        .add_system_to_stage(CoreStage::PostUpdate, move_ennemies.chain(apply_velocity))
+        .add_system_to_stage(CoreStage::PostUpdate, tracking_movement.chain(apply_velocity))
         // Collision detection
         .add_system_to_stage(
             CoreStage::PostUpdate,
@@ -71,8 +73,48 @@ fn setup(mut commands: Commands) {
     let mut camera_bundle = OrthographicCameraBundle::new_2d();
     camera_bundle.orthographic_projection.scale = 1. / 50.;
     commands.spawn_bundle(camera_bundle);
-    commands.insert_resource(EnnemyWaves::default());
     commands.insert_resource(LootAllGemsFor(Timer::from_seconds(0., false)));
+
+    // Setup ennemy waves
+    commands.spawn_bundle(EnnemyWaveBundle {
+        kind: EnnemyKind::BlueFish,
+        timer: Timer::from_seconds(3., false),
+        size: EnnemyWaveSize(40),
+        count: EnnemyWavesCount(2),
+        movement_kind: MovementKind::Tracking,
+    });
+
+    commands.spawn_bundle(EnnemyWaveBundle {
+        kind: EnnemyKind::Pumpkin,
+        timer: Timer::from_seconds(10., true),
+        size: EnnemyWaveSize(10),
+        count: EnnemyWavesCount(3),
+        movement_kind: MovementKind::SlowWalking,
+    });
+
+    commands.spawn_bundle(EnnemyWaveBundle {
+        kind: EnnemyKind::SkeletonHead,
+        timer: Timer::from_seconds(15., false),
+        size: EnnemyWaveSize(30),
+        count: EnnemyWavesCount(1),
+        movement_kind: MovementKind::Running,
+    });
+
+    commands.spawn_bundle(EnnemyWaveBundle {
+        kind: EnnemyKind::BigRedFish,
+        timer: Timer::from_seconds(25., false),
+        size: EnnemyWaveSize(30),
+        count: EnnemyWavesCount(2),
+        movement_kind: MovementKind::Tracking,
+    });
+
+    commands.spawn_bundle(EnnemyWaveBundle {
+        kind: EnnemyKind::Knife,
+        timer: Timer::from_seconds(35., false),
+        size: EnnemyWaveSize(40),
+        count: EnnemyWavesCount(2),
+        movement_kind: MovementKind::Running,
+    });
 
     // Horizontal lines
     for i in 0..=MAP_SIZE {
@@ -322,173 +364,6 @@ fn axe_head_touch_ennemies(
     }
 }
 
-fn spawn_ennemies(
-    time: Res<Time>,
-    iconset_assets: Res<IconsetAssets>,
-    mut ennemy_wave_spawned: ResMut<EnnemyWaves>,
-    player_query: Query<&Transform, With<Player>>,
-    mut commands: Commands,
-) {
-    match time.time_since_startup().as_secs() {
-        2 if !ennemy_wave_spawned.spawn(0) => {
-            let mut rng = rand::thread_rng();
-            for player_transform in player_query.iter() {
-                let origin = Vec2::new(rng.gen_range(-10.0..10.0), rng.gen_range(-10.0..10.0));
-                let origin = move_from_deadzone(origin, 10.0);
-                let offset = player_transform.translation + origin.extend(0.0);
-
-                for _ in 0..40 {
-                    let pos = random_in_radius(&mut rng, offset, 3.).extend(90.);
-
-                    commands
-                        .spawn_bundle(GameSpriteBundle {
-                            transform: Transform::from_translation(pos)
-                                .with_scale(Vec3::splat(0.02)),
-                            sprite: TextureAtlasSprite::new(162),
-                            texture_atlas: iconset_assets.iconset_fantasy_standalone.clone(),
-                            base_rotation: BaseSpriteRotation(23.0 * PI / 14.0),
-                            ..Default::default()
-                        })
-                        .insert(Velocity::default())
-                        .insert(CollisionShape::new_rectangle(0.04, 0.04))
-                        .insert(Ennemy);
-                }
-            }
-        }
-        15 if !ennemy_wave_spawned.spawn(1) => {
-            let mut rng = rand::thread_rng();
-            for player_transform in player_query.iter() {
-                for _ in 0..2 {
-                    let origin = Vec2::new(rng.gen_range(-10.0..10.0), rng.gen_range(-10.0..10.0));
-                    let origin = move_from_deadzone(origin, 10.0);
-                    let offset = player_transform.translation + origin.extend(0.0);
-
-                    for _ in 0..60 {
-                        let pos = random_in_radius(&mut rng, offset, 3.).extend(90.0);
-
-                        commands
-                            .spawn_bundle(GameSpriteBundle {
-                                transform: Transform::from_translation(pos)
-                                    .with_scale(Vec3::splat(0.04)),
-                                sprite: TextureAtlasSprite::new(165),
-                                texture_atlas: iconset_assets.iconset_fantasy_standalone.clone(),
-                                base_rotation: BaseSpriteRotation(23.0 * PI / 14.0),
-                                ..Default::default()
-                            })
-                            .insert(Velocity::default())
-                            .insert(CollisionShape::new_rectangle(0.08, 0.08))
-                            .insert(Ennemy);
-                    }
-                }
-            }
-        }
-        3 if !ennemy_wave_spawned.spawn(2) => {
-            let mut rng = rand::thread_rng();
-            for player_transform in player_query.iter() {
-                for _ in 0..3 {
-                    let origin = Vec2::new(rng.gen_range(-10.0..10.0), rng.gen_range(-10.0..10.0));
-                    let origin = move_from_deadzone(origin, 10.0);
-                    let offset = player_transform.translation + origin.extend(0.0);
-
-                    for _ in 0..60 {
-                        let pos = random_in_radius(&mut rng, offset, 3.).extend(90.0);
-
-                        commands
-                            .spawn_bundle(GameSpriteBundle {
-                                transform: Transform::from_translation(pos)
-                                    .with_scale(Vec3::splat(0.02)),
-                                sprite: TextureAtlasSprite::new(0),
-                                texture_atlas: iconset_assets.iconset_halloween_standalone.clone(),
-                                base_rotation: BaseSpriteRotation(6.),
-                                ..Default::default()
-                            })
-                            .insert(Velocity::default())
-                            .insert(CollisionShape::new_rectangle(0.04, 0.04))
-                            .insert(Ennemy);
-                    }
-                }
-            }
-        }
-        5 if !ennemy_wave_spawned.spawn(3) => {
-            let mut rng = rand::thread_rng();
-            for player_transform in player_query.iter() {
-                for _ in 0..3 {
-                    let origin = Vec2::new(rng.gen_range(-10.0..10.0), rng.gen_range(-10.0..10.0));
-                    let origin = move_from_deadzone(origin, 10.0);
-                    let offset = player_transform.translation + origin.extend(0.0);
-
-                    for _ in 0..60 {
-                        let pos = random_in_radius(&mut rng, offset, 3.).extend(90.0);
-
-                        commands
-                            .spawn_bundle(GameSpriteBundle {
-                                transform: Transform::from_translation(pos)
-                                    .with_scale(Vec3::splat(0.02)),
-                                sprite: TextureAtlasSprite::new(1),
-                                texture_atlas: iconset_assets.iconset_halloween_standalone.clone(),
-                                base_rotation: BaseSpriteRotation(6.),
-                                base_flip: BaseSpriteFlip { flip_x: true, ..Default::default() },
-                                ..Default::default()
-                            })
-                            .insert(Velocity::default())
-                            .insert(CollisionShape::new_rectangle(0.04, 0.04))
-                            .insert(Ennemy);
-                    }
-                }
-            }
-        }
-        _ => (),
-    }
-}
-
-fn move_ennemies(
-    player_query: Query<&Transform, With<Player>>,
-    mut ennemies_query: Query<
-        (
-            &mut Velocity,
-            &mut Transform,
-            &mut TextureAtlasSprite,
-            &BaseSpriteRotation,
-            &BaseSpriteFlip,
-        ),
-        (With<Ennemy>, Without<Player>),
-    >,
-) {
-    let player_transform = match player_query.iter().next() {
-        Some(transform) => transform,
-        None => return,
-    };
-
-    for (mut velocity, mut transform, mut sprite, rotation, flip) in ennemies_query.iter_mut() {
-        let player = player_transform.translation.xy();
-        let ennemy = transform.translation.xy();
-        let direction = (player - ennemy).normalize_or_zero();
-        let strenght = player.distance(ennemy).min(FISH_MAX_SPEED);
-        velocity.0 += direction * strenght * FISH_SPEED;
-
-        let angle = angle_between(ennemy, player);
-        if ennemy.x > player.x {
-            sprite.flip_x = !flip.flip_x;
-            transform.rotation = Quat::from_rotation_z(angle + PI - rotation.0);
-        } else {
-            sprite.flip_x = flip.flip_x;
-            transform.rotation = Quat::from_rotation_z(angle + rotation.0);
-        }
-    }
-}
-
-fn ennemies_repulsion(mut ennemies_query: Query<(&mut Velocity, &Transform, &Ennemy)>) {
-    let mut combinations = ennemies_query.iter_combinations_mut();
-    while let Some([(mut avel, atransf, _), (_, btransf, _)]) = combinations.fetch_next() {
-        let dist = atransf.translation.xy().distance(btransf.translation.xy());
-        if dist <= 2.0 {
-            let strenght = 2.0 - dist;
-            let dir = (btransf.translation.xy() - atransf.translation.xy()).normalize_or_zero();
-            avel.0 -= dir * (strenght / 50.0);
-        }
-    }
-}
-
 fn gems_player_attraction(
     time: Res<Time>,
     mut loot_all_gems: ResMut<LootAllGemsFor>,
@@ -540,9 +415,6 @@ pub struct Player {
 }
 
 #[derive(Component)]
-pub struct Ennemy;
-
-#[derive(Component)]
 pub struct Gem;
 
 #[derive(Component)]
@@ -562,19 +434,8 @@ pub struct RotationRadian(f32);
 #[derive(Default, Component)]
 pub struct Velocity(Vec2);
 
-#[derive(Default)]
-pub struct EnnemyWaves([bool; 4]);
-
 #[derive(Default, Component)]
 pub struct MoveToPlayer(bool);
-
-impl EnnemyWaves {
-    /// Set the next it to `true` and returns the previous value.
-    pub fn spawn(&mut self, nth: usize) -> bool {
-        let EnnemyWaves(spawned) = self;
-        mem::replace(&mut spawned[nth], true)
-    }
-}
 
 #[derive(Component)]
 pub struct Health(pub usize);
