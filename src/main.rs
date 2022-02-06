@@ -4,13 +4,17 @@ use std::mem;
 use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
 use bevy::transform::TransformSystem;
-use bevy_asset_loader::{AssetCollection, AssetLoader};
+use bevy_asset_loader::AssetLoader;
 use impacted::CollisionShape;
 use rand::Rng;
 
+use self::assets::*;
 use self::game_sprites::*;
+use self::helper::*;
 
+mod assets;
 mod game_sprites;
+mod helper;
 
 const MAP_SIZE: u32 = 41;
 const GRID_WIDTH: f32 = 0.05;
@@ -118,7 +122,7 @@ fn spawn_player(mut commands: Commands) {
             ..Default::default()
         })
         .insert(Velocity::default())
-        .insert(CollisionShape::new_rectangle(1.5, 1.5))
+        .insert(CollisionShape::new_rectangle(1.3, 1.3))
         .insert(Player::default());
 
     commands
@@ -316,22 +320,6 @@ fn axe_head_touch_ennemies(
                 .insert(Gem);
         }
     }
-}
-
-fn random_in_radius<R: Rng>(rng: &mut R, center: Vec3, radius: f32) -> Vec2 {
-    let [x0, y0, _] = center.to_array();
-    let t = 2.0 * PI * rng.gen_range(0.0..=1.0);
-    let r = radius * rng.gen_range(0.0..=1.0f32).sqrt();
-    let x = x0 + r * t.cos();
-    let y = y0 + r * t.sin();
-    Vec2::new(x, y)
-}
-
-fn move_from_deadzone(origin: Vec2, deadzone: f32) -> Vec2 {
-    let [x, y] = origin.to_array();
-    let x = if x.is_sign_positive() { x + deadzone } else { x - deadzone };
-    let y = if y.is_sign_positive() { y + deadzone } else { y - deadzone };
-    Vec2::new(x, y)
 }
 
 fn spawn_ennemies(
@@ -539,13 +527,6 @@ fn camera_follow(
     }
 }
 
-/// Returns the angle between 2 points in radians
-fn angle_between(a: Vec2, b: Vec2) -> f32 {
-    let [ax, ay] = a.to_array();
-    let [bx, by] = b.to_array();
-    (by - ay).atan2(bx - ax)
-}
-
 #[derive(Clone, Eq, PartialEq, Debug, Hash)]
 enum MyStates {
     AssetLoading,
@@ -595,18 +576,5 @@ impl EnnemyWaves {
     }
 }
 
-// fish 162-165
-#[derive(AssetCollection)]
-struct IconsetAssets {
-    #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 18, rows = 50))]
-    #[asset(path = "images/iconset_fantasy_standalone.png")]
-    iconset_fantasy_standalone: Handle<TextureAtlas>,
-
-    #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 18, rows = 50))]
-    #[asset(path = "images/iconset_fantasy_castshadows.png")]
-    iconset_fantasy_castshadows: Handle<TextureAtlas>,
-
-    #[asset(texture_atlas(tile_size_x = 32., tile_size_y = 32., columns = 10, rows = 4))]
-    #[asset(path = "images/iconset_halloween_standalone.png")]
-    iconset_halloween_standalone: Handle<TextureAtlas>,
-}
+#[derive(Component)]
+pub struct Health(pub usize);
