@@ -8,3 +8,11 @@ bevy = "0.6.0"
 bevy_asset_loader = { version = "0.8.0", features = ["render"] }
 impacted = { version = "1.0.0", features = ["bevy-06"] }
 rand = "0.8.4"
+
+# Enable only a small amount of optimization in debug mode
+[profile.dev]
+opt-level = 1
+
+# Enable high optimizations for dependencies (incl. Bevy), but not for our code:
+[profile.dev.package."*"]
+opt-level = 3

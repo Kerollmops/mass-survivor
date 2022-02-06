@@ -19,7 +19,7 @@ const FISH_MAX_SPEED: f32 = 5.0;
 const HEALTHY_PLAYER_COLOR: Color = Color::rgb(0., 0.47, 1.);
 const HIT_PLAYER_COLOR: Color = Color::rgb(0.9, 0.027, 0.);
 
-const AXE_HEAD_COLOR: Color = Color::rgb(0.376, 0.8, 0.);
+const AXE_HEAD_COLOR: Color = Color::rgb(0.52, 0.62, 0.8);
 const AXE_HEAD_SPEED: f32 = 2.; // radian/s
 
 fn main() {
@@ -104,9 +104,10 @@ fn setup(mut commands: Commands) {
 }
 
 fn spawn_player(mut commands: Commands) {
+    let player_pos = Vec3::new(0., 0., 100.);
     commands
         .spawn_bundle(SpriteBundle {
-            transform: Transform::from_translation(Vec3::new(0., 0., 100.)),
+            transform: Transform::from_translation(player_pos),
             sprite: Sprite {
                 color: HEALTHY_PLAYER_COLOR,
                 custom_size: Some(Vec2::new(1., 1.)),
@@ -115,23 +116,22 @@ fn spawn_player(mut commands: Commands) {
             ..Default::default()
         })
         .insert(Velocity::default())
-        .insert(CollisionShape::new_rectangle(1., 1.))
-        .insert(Player::default())
-        .with_children(|parent| {
-            parent
-                .spawn_bundle(SpriteBundle {
-                    transform: Transform::from_translation(Vec3::new(0., -3., 0.)),
-                    sprite: Sprite {
-                        color: AXE_HEAD_COLOR,
-                        custom_size: Some(Vec2::new(0.8, 0.8)),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                })
-                .insert(CollisionShape::new_circle(0.7))
-                .insert(RotationRadian(0.))
-                .insert(AxeHead);
-        });
+        .insert(CollisionShape::new_rectangle(1.5, 1.5))
+        .insert(Player::default());
+
+    commands
+        .spawn_bundle(SpriteBundle {
+            transform: Transform::from_translation(player_pos + Vec3::new(0., -3., 0.)),
+            sprite: Sprite {
+                color: AXE_HEAD_COLOR,
+                custom_size: Some(Vec2::new(0.8, 0.8)),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .insert(CollisionShape::new_circle(0.7))
+        .insert(RotationRadian(0.))
+        .insert(AxeHead);
 }
 
 fn move_player(keys: Res<Input<KeyCode>>, mut player_query: Query<&mut Velocity, With<Player>>) {
@@ -177,8 +177,17 @@ fn update_shape_transforms(
 
 fn rotate_axe_head(
     time: Res<Time>,
-    mut axe_head_query: Query<(&mut Transform, &mut RotationRadian), With<AxeHead>>,
+    mut player_query: Query<&Transform, With<Player>>,
+    mut axe_head_query: Query<
+        (&mut Transform, &mut RotationRadian),
+        (With<AxeHead>, Without<Player>),
+    >,
 ) {
+    let player_transform = match player_query.iter_mut().next() {
+        Some(transform) => transform,
+        None => return,
+    };
+
     let (mut transform, mut rotation) = match axe_head_query.iter_mut().next() {
         Some(transform) => transform,
         None => return,
@@ -189,7 +198,7 @@ fn rotate_axe_head(
 
     let x = rotation.0.cos() * 3.;
     let y = rotation.0.sin() * 3.;
-    transform.translation = Vec3::new(x, y, 0.);
+    transform.translation = player_transform.translation + Vec3::new(x, y, 0.);
 }
 
 fn change_player_color(
@@ -247,7 +256,7 @@ fn create_loot(
                 texture_atlas: iconset_assets.iconset_fantasy_castshadows.clone(),
                 ..Default::default()
             })
-            .insert(CollisionShape::new_rectangle(0.04, 0.04))
+            .insert(CollisionShape::new_rectangle(2., 2.))
             .insert(Stuff::FishingRod);
     }
 }
