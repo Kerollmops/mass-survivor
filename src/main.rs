@@ -57,7 +57,6 @@ fn main() {
                 .chain(change_player_color) // Change the colors
                 .chain(player_loot_gems) // Remove and increment player XP
                 .chain(ennemies_repulsion) // Repulse ennemies
-                .chain(gems_repulsion) // Repulse gems
                 .chain(gems_player_attraction) // Player attract gems in vicinity
                 .after(TransformSystem::TransformPropagate), // Better to consider the up-to-date transforms
         )
@@ -343,59 +342,59 @@ fn spawn_ennemies(
     mut commands: Commands,
 ) {
     match time.time_since_startup().as_secs() {
-        // 2 if !ennemy_wave_spawned.spawn(0) => {
-        //     let mut rng = rand::thread_rng();
-        //     for player_transform in player_query.iter() {
-        //         let origin = Vec2::new(rng.gen_range(-10.0..10.0), rng.gen_range(-10.0..10.0));
-        //         let origin = move_from_deadzone(origin, 10.0);
-        //         let offset = player_transform.translation + origin.extend(0.0);
+        2 if !ennemy_wave_spawned.spawn(0) => {
+            let mut rng = rand::thread_rng();
+            for player_transform in player_query.iter() {
+                let origin = Vec2::new(rng.gen_range(-10.0..10.0), rng.gen_range(-10.0..10.0));
+                let origin = move_from_deadzone(origin, 10.0);
+                let offset = player_transform.translation + origin.extend(0.0);
 
-        //         for _ in 0..40 {
-        //             let pos = random_in_radius(&mut rng, offset, 3.).extend(90.);
+                for _ in 0..40 {
+                    let pos = random_in_radius(&mut rng, offset, 3.).extend(90.);
 
-        //             commands
-        //                 .spawn_bundle(GameSpriteBundle {
-        //                     transform: Transform::from_translation(pos)
-        //                         .with_scale(Vec3::splat(0.02)),
-        //                     sprite: TextureAtlasSprite::new(162),
-        //                     texture_atlas: iconset_assets.iconset_fantasy_standalone.clone(),
-        //                     base_rotation: BaseSpriteRotation(23.0 * PI / 14.0),
-        //                     ..Default::default()
-        //                 })
-        //                 .insert(Velocity::default())
-        //                 .insert(CollisionShape::new_rectangle(0.04, 0.04))
-        //                 .insert(Ennemy);
-        //         }
-        //     }
-        // }
-        // 15 if !ennemy_wave_spawned.spawn(1) => {
-        //     let mut rng = rand::thread_rng();
-        //     for player_transform in player_query.iter() {
-        //         for _ in 0..2 {
-        //             let origin = Vec2::new(rng.gen_range(-10.0..10.0), rng.gen_range(-10.0..10.0));
-        //             let origin = move_from_deadzone(origin, 10.0);
-        //             let offset = player_transform.translation + origin.extend(0.0);
+                    commands
+                        .spawn_bundle(GameSpriteBundle {
+                            transform: Transform::from_translation(pos)
+                                .with_scale(Vec3::splat(0.02)),
+                            sprite: TextureAtlasSprite::new(162),
+                            texture_atlas: iconset_assets.iconset_fantasy_standalone.clone(),
+                            base_rotation: BaseSpriteRotation(23.0 * PI / 14.0),
+                            ..Default::default()
+                        })
+                        .insert(Velocity::default())
+                        .insert(CollisionShape::new_rectangle(0.04, 0.04))
+                        .insert(Ennemy);
+                }
+            }
+        }
+        15 if !ennemy_wave_spawned.spawn(1) => {
+            let mut rng = rand::thread_rng();
+            for player_transform in player_query.iter() {
+                for _ in 0..2 {
+                    let origin = Vec2::new(rng.gen_range(-10.0..10.0), rng.gen_range(-10.0..10.0));
+                    let origin = move_from_deadzone(origin, 10.0);
+                    let offset = player_transform.translation + origin.extend(0.0);
 
-        //             for _ in 0..60 {
-        //                 let pos = random_in_radius(&mut rng, offset, 3.).extend(90.0);
+                    for _ in 0..60 {
+                        let pos = random_in_radius(&mut rng, offset, 3.).extend(90.0);
 
-        //                 commands
-        //                     .spawn_bundle(GameSpriteBundle {
-        //                         transform: Transform::from_translation(pos)
-        //                             .with_scale(Vec3::splat(0.04)),
-        //                         sprite: TextureAtlasSprite::new(165),
-        //                         texture_atlas: iconset_assets.iconset_fantasy_standalone.clone(),
-        //                         base_rotation: BaseSpriteRotation(23.0 * PI / 14.0),
-        //                         ..Default::default()
-        //                     })
-        //                     .insert(Velocity::default())
-        //                     .insert(CollisionShape::new_rectangle(0.08, 0.08))
-        //                     .insert(Ennemy);
-        //             }
-        //         }
-        //     }
-        // }
-        3 if !ennemy_wave_spawned.spawn(1) => {
+                        commands
+                            .spawn_bundle(GameSpriteBundle {
+                                transform: Transform::from_translation(pos)
+                                    .with_scale(Vec3::splat(0.04)),
+                                sprite: TextureAtlasSprite::new(165),
+                                texture_atlas: iconset_assets.iconset_fantasy_standalone.clone(),
+                                base_rotation: BaseSpriteRotation(23.0 * PI / 14.0),
+                                ..Default::default()
+                            })
+                            .insert(Velocity::default())
+                            .insert(CollisionShape::new_rectangle(0.08, 0.08))
+                            .insert(Ennemy);
+                    }
+                }
+            }
+        }
+        3 if !ennemy_wave_spawned.spawn(2) => {
             let mut rng = rand::thread_rng();
             for player_transform in player_query.iter() {
                 for _ in 0..3 {
@@ -422,34 +421,34 @@ fn spawn_ennemies(
                 }
             }
         }
-        // 5 if !ennemy_wave_spawned.spawn(2) => {
-        //     let mut rng = rand::thread_rng();
-        //     for player_transform in player_query.iter() {
-        //         for _ in 0..3 {
-        //             let origin = Vec2::new(rng.gen_range(-10.0..10.0), rng.gen_range(-10.0..10.0));
-        //             let origin = move_from_deadzone(origin, 10.0);
-        //             let offset = player_transform.translation + origin.extend(0.0);
+        5 if !ennemy_wave_spawned.spawn(3) => {
+            let mut rng = rand::thread_rng();
+            for player_transform in player_query.iter() {
+                for _ in 0..3 {
+                    let origin = Vec2::new(rng.gen_range(-10.0..10.0), rng.gen_range(-10.0..10.0));
+                    let origin = move_from_deadzone(origin, 10.0);
+                    let offset = player_transform.translation + origin.extend(0.0);
 
-        //             for _ in 0..60 {
-        //                 let pos = random_in_radius(&mut rng, offset, 3.).extend(90.0);
+                    for _ in 0..60 {
+                        let pos = random_in_radius(&mut rng, offset, 3.).extend(90.0);
 
-        //                 commands
-        //                     .spawn_bundle(GameSpriteBundle {
-        //                         transform: Transform::from_translation(pos)
-        //                             .with_scale(Vec3::splat(0.02)),
-        //                         sprite: TextureAtlasSprite::new(1),
-        //                         texture_atlas: iconset_assets.iconset_halloween_standalone.clone(),
-        //                         base_rotation: BaseSpriteRotation(6.),
-        //                         base_flip: BaseSpriteFlip { flip_x: true, ..Default::default() },
-        //                         ..Default::default()
-        //                     })
-        //                     .insert(Velocity::default())
-        //                     .insert(CollisionShape::new_rectangle(0.04, 0.04))
-        //                     .insert(Ennemy);
-        //             }
-        //         }
-        //     }
-        // }
+                        commands
+                            .spawn_bundle(GameSpriteBundle {
+                                transform: Transform::from_translation(pos)
+                                    .with_scale(Vec3::splat(0.02)),
+                                sprite: TextureAtlasSprite::new(1),
+                                texture_atlas: iconset_assets.iconset_halloween_standalone.clone(),
+                                base_rotation: BaseSpriteRotation(6.),
+                                base_flip: BaseSpriteFlip { flip_x: true, ..Default::default() },
+                                ..Default::default()
+                            })
+                            .insert(Velocity::default())
+                            .insert(CollisionShape::new_rectangle(0.04, 0.04))
+                            .insert(Ennemy);
+                    }
+                }
+            }
+        }
         _ => (),
     }
 }
@@ -498,18 +497,6 @@ fn ennemies_repulsion(mut ennemies_query: Query<(&mut Velocity, &Transform, &Enn
             let strenght = 2.0 - dist;
             let dir = (btransf.translation.xy() - atransf.translation.xy()).normalize_or_zero();
             avel.0 -= dir * (strenght / 50.0);
-        }
-    }
-}
-
-fn gems_repulsion(mut gems_query: Query<(&mut Velocity, &Transform, &Gem)>) {
-    let mut combinations = gems_query.iter_combinations_mut();
-    while let Some([(mut avel, atransf, _), (_, btransf, _)]) = combinations.fetch_next() {
-        let dist = atransf.translation.xy().distance(btransf.translation.xy());
-        if dist <= 0.3 {
-            let strenght = 2.0 - dist;
-            let dir = (btransf.translation.xy() - atransf.translation.xy()).normalize_or_zero();
-            avel.0 -= dir * (strenght / 100.0);
         }
     }
 }
@@ -595,7 +582,7 @@ pub struct RotationRadian(f32);
 pub struct Velocity(Vec2);
 
 #[derive(Default)]
-pub struct EnnemyWaves([bool; 3]);
+pub struct EnnemyWaves([bool; 4]);
 
 #[derive(Default, Component)]
 pub struct MoveToPlayer(bool);
