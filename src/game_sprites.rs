@@ -2,11 +2,8 @@ use bevy::prelude::*;
 
 #[derive(Default, Clone, Bundle)]
 pub struct GameSpriteBundle {
-    pub sprite: TextureAtlasSprite,
-    pub texture_atlas: Handle<TextureAtlas>,
-    pub transform: Transform,
-    pub global_transform: GlobalTransform,
-    pub visibility: Visibility,
+    #[bundle]
+    pub sprite: SpriteSheetBundle,
     pub base_rotation: BaseSpriteRotation,
     pub base_flip: BaseSpriteFlip,
 }

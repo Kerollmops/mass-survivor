@@ -4,23 +4,23 @@ use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
 use bevy::transform::TransformSystem;
 use bevy_asset_loader::AssetLoader;
-use impacted::CollisionShape;
+use heron::prelude::*;
 use rand::Rng;
 
 use self::assets::*;
-use self::ennemies::*;
+use self::enemies::*;
 use self::game_sprites::*;
 use self::helper::*;
 
 mod assets;
-mod ennemies;
+mod enemies;
 mod game_sprites;
 mod helper;
 
 const MAP_SIZE: u32 = 41;
 const GRID_WIDTH: f32 = 0.05;
 const SLOW_DOWN: f32 = 4.0;
-const PLAYER_SPEED: f32 = 0.5;
+const PLAYER_SPEED: f32 = 10.0;
 
 const HEALTHY_PLAYER_COLOR: Color = Color::rgb(0., 0.47, 1.);
 const HIT_PLAYER_COLOR: Color = Color::rgb(0.9, 0.027, 0.);
@@ -38,33 +38,26 @@ fn main() {
     app.add_state(MyStates::AssetLoading)
         .insert_resource(ClearColor(Color::rgb(0.53, 0.53, 0.53)))
         .add_plugins(DefaultPlugins)
+        .add_plugin(PhysicsPlugin::default())
+        .insert_resource(Gravity::from(Vec3::ZERO))
         .add_startup_system(setup)
         .add_startup_system(spawn_player)
-        // Player movement and camera tracking
-        .add_system_to_stage(
-            CoreStage::PostUpdate,
-            move_player.chain(slow_walking_movement).chain(running_movement).chain(camera_follow),
-        )
-        // Ennemies spawning
+        .add_system_to_stage(CoreStage::PostUpdate, camera_follow)
         .add_system_set(
             SystemSet::on_update(MyStates::Next)
-                .with_system(spawn_ennemy_waves)
-                .with_system(create_loot) // Put the loot on the floor
-                .with_system(player_loot_stuff)
-                .with_system(axe_head_touch_ennemies), // Kill ennemies touched by axe head and spawn gems
-        )
-        // Apply the velocity to the transforms
-        .add_system_to_stage(CoreStage::PostUpdate, tracking_movement.chain(apply_velocity))
-        // Collision detection
-        .add_system_to_stage(
-            CoreStage::PostUpdate,
-            update_shape_transforms // First update transforms
-                .chain(rotate_axe_head) // Rotate the axe around the player
-                .chain(change_player_color) // Change the colors
-                .chain(player_loot_gems) // Remove and increment player XP
-                .chain(ennemies_repulsion) // Repulse ennemies
-                .chain(gems_player_attraction) // Player attract gems in vicinity
-                .after(TransformSystem::TransformPropagate), // Better to consider the up-to-date transforms
+                .with_system(move_player)
+                .with_system(tracking_movement)
+                .with_system(slow_walking_movement)
+                .with_system(running_group_movement)
+                .with_system(spawn_enemy_waves)
+                // .with_system(create_loot)
+                // .with_system(player_loot_stuff)
+                .with_system(axe_head_kill_ennemies)
+                .with_system(rotate_axe_head)
+                .with_system(change_player_color)
+                // .with_system(player_loot_gems)
+                // .with_system(ennemies_repulsion)
+                .with_system(gems_player_attraction),
         )
         .run();
 }
@@ -75,45 +68,45 @@ fn setup(mut commands: Commands) {
     commands.spawn_bundle(camera_bundle);
     commands.insert_resource(LootAllGemsFor(Timer::from_seconds(0., false)));
 
-    // Setup ennemy waves
-    commands.spawn_bundle(EnnemyWaveBundle {
-        kind: EnnemyKind::BlueFish,
+    // Setup enemy waves
+    commands.spawn_bundle(EnemyWaveBundle {
+        kind: EnemyKind::BlueFish,
         timer: Timer::from_seconds(3., false),
-        size: EnnemyWaveSize(40),
-        count: EnnemyWavesCount(2),
+        size: EnemyWaveSize(40),
+        count: EnemyWavesCount(2),
         movement_kind: MovementKind::Tracking,
     });
 
-    commands.spawn_bundle(EnnemyWaveBundle {
-        kind: EnnemyKind::Pumpkin,
+    commands.spawn_bundle(EnemyWaveBundle {
+        kind: EnemyKind::Pumpkin,
         timer: Timer::from_seconds(10., true),
-        size: EnnemyWaveSize(10),
-        count: EnnemyWavesCount(3),
+        size: EnemyWaveSize(10),
+        count: EnemyWavesCount(3),
         movement_kind: MovementKind::SlowWalking,
     });
 
-    commands.spawn_bundle(EnnemyWaveBundle {
-        kind: EnnemyKind::SkeletonHead,
+    commands.spawn_bundle(EnemyWaveBundle {
+        kind: EnemyKind::SkeletonHead,
         timer: Timer::from_seconds(15., false),
-        size: EnnemyWaveSize(30),
-        count: EnnemyWavesCount(1),
-        movement_kind: MovementKind::Running,
+        size: EnemyWaveSize(30),
+        count: EnemyWavesCount(1),
+        movement_kind: MovementKind::RunningGroup,
     });
 
-    commands.spawn_bundle(EnnemyWaveBundle {
-        kind: EnnemyKind::BigRedFish,
+    commands.spawn_bundle(EnemyWaveBundle {
+        kind: EnemyKind::BigRedFish,
         timer: Timer::from_seconds(25., false),
-        size: EnnemyWaveSize(30),
-        count: EnnemyWavesCount(2),
+        size: EnemyWaveSize(30),
+        count: EnemyWavesCount(2),
         movement_kind: MovementKind::Tracking,
     });
 
-    commands.spawn_bundle(EnnemyWaveBundle {
-        kind: EnnemyKind::Knife,
+    commands.spawn_bundle(EnemyWaveBundle {
+        kind: EnemyKind::Knife,
         timer: Timer::from_seconds(35., false),
-        size: EnnemyWaveSize(40),
-        count: EnnemyWavesCount(2),
-        movement_kind: MovementKind::Running,
+        size: EnemyWaveSize(40),
+        count: EnemyWavesCount(2),
+        movement_kind: MovementKind::RunningGroup,
     });
 
     // Horizontal lines
@@ -164,78 +157,67 @@ fn spawn_player(mut commands: Commands) {
             ..Default::default()
         })
         .insert(Velocity::default())
-        .insert(CollisionShape::new_rectangle(1.3, 1.3))
-        .insert(Player::default());
-
-    commands
-        .spawn_bundle(SpriteBundle {
-            transform: Transform::from_translation(player_pos + Vec3::new(0., -3., 0.)),
-            sprite: Sprite {
-                color: AXE_HEAD_COLOR,
-                custom_size: Some(Vec2::new(0.8, 0.8)),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .insert(CollisionShape::new_circle(0.7))
-        .insert(RotationRadian(0.))
-        .insert(AxeHead);
+        .insert(RigidBody::Dynamic)
+        .insert(CollisionShape::Cuboid { half_extends: Vec3::splat(0.5), border_radius: None })
+        .insert(RotationConstraints::lock())
+        .insert(
+            CollisionLayers::none()
+                .with_group(GameLayer::Player)
+                .with_masks(&[GameLayer::Loot, GameLayer::Enemies]),
+        )
+        .insert(Player::default())
+        .with_children(|commands| {
+            commands
+                .spawn_bundle(SpriteBundle {
+                    transform: Transform::from_translation(Vec3::new(0., -3., 0.)),
+                    sprite: Sprite {
+                        color: AXE_HEAD_COLOR,
+                        custom_size: Some(Vec2::new(0.8, 0.8)),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .insert(RigidBody::Static)
+                .insert(CollisionShape::Sphere { radius: 0.6 })
+                .insert(
+                    CollisionLayers::none()
+                        .with_group(GameLayer::Weapon)
+                        .with_mask(GameLayer::Enemies),
+                )
+                .insert(RotationRadian(0.))
+                .insert(AxeHead);
+        });
 }
 
 fn move_player(keys: Res<Input<KeyCode>>, mut player_query: Query<&mut Velocity, With<Player>>) {
     for mut velocity in player_query.iter_mut() {
-        let mut direction = Vec2::ZERO;
+        let y = if keys.any_pressed([KeyCode::Up, KeyCode::W]) {
+            1.
+        } else if keys.any_pressed([KeyCode::Down, KeyCode::S]) {
+            -1.
+        } else {
+            0.
+        };
 
-        if keys.any_pressed([KeyCode::Up, KeyCode::W]) {
-            direction.y += 1.;
-        }
-        if keys.any_pressed([KeyCode::Down, KeyCode::S]) {
-            direction.y -= 1.;
-        }
-        if keys.any_pressed([KeyCode::Right, KeyCode::D]) {
-            direction.x += 1.;
-        }
-        if keys.any_pressed([KeyCode::Left, KeyCode::A]) {
-            direction.x -= 1.;
-        }
+        let x = if keys.any_pressed([KeyCode::Right, KeyCode::D]) {
+            1.
+        } else if keys.any_pressed([KeyCode::Left, KeyCode::A]) {
+            -1.
+        } else {
+            0.
+        };
 
-        if direction == Vec2::ZERO {
-            continue;
-        }
-
-        velocity.0 += direction * PLAYER_SPEED;
-    }
-}
-
-fn apply_velocity(time: Res<Time>, mut transform_query: Query<(&mut Transform, &mut Velocity)>) {
-    for (mut transform, mut velocity) in transform_query.iter_mut() {
-        transform.translation += velocity.0.extend(0.0) * time.delta_seconds();
-        velocity.0 /= Vec2::ONE + (time.delta_seconds() * SLOW_DOWN);
-    }
-}
-
-/// Update the `CollisionShape` transform if the `GlobalTransform` has changed
-fn update_shape_transforms(
-    mut shapes: Query<(&mut CollisionShape, &GlobalTransform), Changed<GlobalTransform>>,
-) {
-    for (mut shape, transform) in shapes.iter_mut() {
-        shape.set_transform(*transform);
+        velocity.linear = Vec2::new(x, y).normalize_or_zero().extend(0.) * PLAYER_SPEED;
     }
 }
 
 fn rotate_axe_head(
     time: Res<Time>,
-    mut player_query: Query<&Transform, With<Player>>,
     mut axe_head_query: Query<
         (&mut Transform, &mut RotationRadian),
         (With<AxeHead>, Without<Player>),
     >,
 ) {
-    let player_transform = match player_query.iter_mut().next() {
-        Some(transform) => transform,
-        None => return,
-    };
-
     let (mut transform, mut rotation) = match axe_head_query.iter_mut().next() {
         Some(transform) => transform,
         None => return,
@@ -246,122 +228,163 @@ fn rotate_axe_head(
 
     let x = rotation.0.cos() * 3.;
     let y = rotation.0.sin() * 3.;
-    transform.translation = player_transform.translation + Vec3::new(x, y, 0.);
+    transform.translation = Vec3::new(x, y, 0.);
 }
 
 fn change_player_color(
-    mut player_query: Query<(&mut Sprite, &CollisionShape), With<Player>>,
-    ennemies_query: Query<&CollisionShape, With<Ennemy>>,
+    mut events: EventReader<CollisionEvent>,
+    mut player_query: Query<(Entity, &mut Sprite), With<Player>>,
 ) {
-    let (mut player_sprite, player_shape) = match player_query.iter_mut().next() {
+    let (entity, mut player_sprite) = match player_query.iter_mut().next() {
         Some(value) => value,
         None => return,
     };
 
-    if ennemies_query.iter().any(|shape| shape.is_collided_with(player_shape)) {
-        player_sprite.color = HIT_PLAYER_COLOR;
-    } else {
-        player_sprite.color = HEALTHY_PLAYER_COLOR;
-    }
-}
+    for event in events.iter() {
+        if let CollisionEvent::Started(data1, data2) = event {
+            let a = data1.collision_shape_entity();
+            let b = data2.collision_shape_entity();
 
-fn player_loot_gems(
-    mut commands: Commands,
-    mut player_query: Query<(&mut Player, &CollisionShape)>,
-    gems_query: Query<(Entity, &CollisionShape), With<Gem>>,
-) {
-    let (mut player, player_shape) = match player_query.iter_mut().next() {
-        Some(value) => value,
-        None => return,
-    };
-
-    for (gem_entity, shape) in gems_query.iter() {
-        if shape.is_collided_with(player_shape) {
-            player.xp += 1;
-            commands.entity(gem_entity).despawn();
-        }
-    }
-}
-
-fn create_loot(
-    mut commands: Commands,
-    iconset_assets: Res<IconsetAssets>,
-    mut player_query: Query<(&mut Player, &Transform)>,
-) {
-    let (mut player, transform) = match player_query.iter_mut().next() {
-        Some(value) => value,
-        None => return,
-    };
-
-    let mut rng = rand::thread_rng();
-    if !player.lvl1_stuff_generated && player.xp >= 30 {
-        player.lvl1_stuff_generated = true;
-        let pos = random_in_radius(&mut rng, transform.translation, 5.);
-        let pos = move_from_deadzone(pos, 3.).extend(95.);
-
-        commands
-            .spawn_bundle(SpriteSheetBundle {
-                transform: Transform::from_translation(pos).with_scale(Vec3::splat(0.04)),
-                sprite: TextureAtlasSprite::new(864),
-                texture_atlas: iconset_assets.iconset_fantasy_castshadows.clone(),
-                ..Default::default()
-            })
-            .insert(CollisionShape::new_rectangle(2., 2.))
-            .insert(Stuff::FishingRod);
-    }
-}
-
-fn player_loot_stuff(
-    mut commands: Commands,
-    mut loot_all_gems: ResMut<LootAllGemsFor>,
-    mut player_query: Query<(&mut Player, &CollisionShape)>,
-    stuff_query: Query<(Entity, &Stuff, &CollisionShape)>,
-) {
-    let (_player, player_shape) = match player_query.iter_mut().next() {
-        Some(value) => value,
-        None => return,
-    };
-
-    for (stuff_entity, stuff, shape) in stuff_query.iter() {
-        if shape.is_collided_with(player_shape) {
-            match stuff {
-                Stuff::FishingRod => {
-                    *loot_all_gems = LootAllGemsFor(Timer::from_seconds(2., false))
-                }
+            if a == entity || b == entity {
+                player_sprite.color = HIT_PLAYER_COLOR;
+                return;
             }
-            commands.entity(stuff_entity).despawn();
         }
     }
+
+    player_sprite.color = HEALTHY_PLAYER_COLOR;
 }
 
-fn axe_head_touch_ennemies(
+// fn change_player_color(
+//     mut player_query: Query<(&mut Sprite, &CollisionShape), With<Player>>,
+//     ennemies_query: Query<&CollisionShape, With<Enemy>>,
+// ) {
+//     let (mut player_sprite, player_shape) = match player_query.iter_mut().next() {
+//         Some(value) => value,
+//         None => return,
+//     };
+
+//     if ennemies_query.iter().any(|shape| shape.is_collided_with(player_shape)) {
+//         player_sprite.color = HIT_PLAYER_COLOR;
+//     } else {
+//         player_sprite.color = HEALTHY_PLAYER_COLOR;
+//     }
+// }
+
+// fn player_loot_gems(
+//     mut commands: Commands,
+//     mut player_query: Query<(&mut Player, &CollisionShape)>,
+//     gems_query: Query<(Entity, &CollisionShape), With<Gem>>,
+// ) {
+//     let (mut player, player_shape) = match player_query.iter_mut().next() {
+//         Some(value) => value,
+//         None => return,
+//     };
+
+//     for (gem_entity, shape) in gems_query.iter() {
+//         if shape.is_collided_with(player_shape) {
+//             player.xp += 1;
+//             commands.entity(gem_entity).despawn();
+//         }
+//     }
+// }
+
+// fn create_loot(
+//     mut commands: Commands,
+//     iconset_assets: Res<IconsetAssets>,
+//     mut player_query: Query<(&mut Player, &Transform)>,
+// ) {
+//     let (mut player, transform) = match player_query.iter_mut().next() {
+//         Some(value) => value,
+//         None => return,
+//     };
+
+//     let mut rng = rand::thread_rng();
+//     if !player.lvl1_stuff_generated && player.xp >= 30 {
+//         player.lvl1_stuff_generated = true;
+//         let pos = random_in_radius(&mut rng, transform.translation, 5.);
+//         let pos = move_from_deadzone(pos, 3.).extend(95.);
+
+//         commands
+//             .spawn_bundle(SpriteSheetBundle {
+//                 transform: Transform::from_translation(pos).with_scale(Vec3::splat(0.04)),
+//                 sprite: TextureAtlasSprite::new(864),
+//                 texture_atlas: iconset_assets.iconset_fantasy_castshadows.clone(),
+//                 ..Default::default()
+//             })
+//             .insert(CollisionShape::new_rectangle(2., 2.))
+//             .insert(Stuff::FishingRod);
+//     }
+// }
+
+// fn player_loot_stuff(
+//     mut commands: Commands,
+//     mut loot_all_gems: ResMut<LootAllGemsFor>,
+//     mut player_query: Query<(&mut Player, &CollisionShape)>,
+//     stuff_query: Query<(Entity, &Stuff, &CollisionShape)>,
+// ) {
+//     let (_player, player_shape) = match player_query.iter_mut().next() {
+//         Some(value) => value,
+//         None => return,
+//     };
+
+//     for (stuff_entity, stuff, shape) in stuff_query.iter() {
+//         if shape.is_collided_with(player_shape) {
+//             match stuff {
+//                 Stuff::FishingRod => {
+//                     *loot_all_gems = LootAllGemsFor(Timer::from_seconds(2., false))
+//                 }
+//             }
+//             commands.entity(stuff_entity).despawn();
+//         }
+//     }
+// }
+
+fn axe_head_kill_ennemies(
     mut commands: Commands,
     iconset_assets: Res<IconsetAssets>,
-    axe_head_query: Query<&CollisionShape, With<AxeHead>>,
-    ennemies_query: Query<(Entity, &Transform, &CollisionShape), With<Ennemy>>,
+    mut events: EventReader<CollisionEvent>,
+    ennemies_query: Query<&Transform>,
 ) {
-    let axe_head_shape = match axe_head_query.iter().next() {
-        Some(shape) => shape,
-        None => return,
-    };
+    events
+        .iter()
+        .filter(|e| e.is_started())
+        .filter_map(|event| {
+            let (entity_1, entity_2) = event.rigid_body_entities();
+            let (layers_1, layers_2) = event.collision_layers();
+            if is_weapon(layers_1) && is_enemy(layers_2) {
+                Some(entity_2)
+            } else if is_weapon(layers_2) && is_enemy(layers_1) {
+                Some(entity_1)
+            } else {
+                None
+            }
+        })
+        .for_each(|enemy_entity| {
+            if let Ok(transform) = ennemies_query.get_component::<Transform>(enemy_entity) {
+                let pos = transform.translation.xy().extend(80.0);
+                commands.entity(enemy_entity).despawn();
+                commands
+                    .spawn_bundle(SpriteSheetBundle {
+                        transform: Transform::from_translation(pos).with_scale(Vec3::splat(0.015)),
+                        sprite: TextureAtlasSprite::new(474), // blue diamond
+                        texture_atlas: iconset_assets.iconset_fantasy_standalone.clone(),
+                        ..Default::default()
+                    })
+                    .insert(MoveToPlayer::default())
+                    .insert(Gem);
+            }
+        });
+}
 
-    for (entity, transform, shape) in ennemies_query.iter() {
-        if shape.is_collided_with(axe_head_shape) {
-            let pos = transform.translation.xy().extend(80.0);
-            commands.entity(entity).despawn();
-            commands
-                .spawn_bundle(SpriteSheetBundle {
-                    transform: Transform::from_translation(pos).with_scale(Vec3::splat(0.015)),
-                    sprite: TextureAtlasSprite::new(474),
-                    texture_atlas: iconset_assets.iconset_fantasy_standalone.clone(),
-                    ..Default::default()
-                })
-                .insert(CollisionShape::new_rectangle(0.04, 0.04))
-                .insert(Velocity::default())
-                .insert(MoveToPlayer::default())
-                .insert(Gem);
-        }
-    }
+// Note: We check both layers each time to avoid a false-positive
+// that can occur if an entity has the default (unconfigured) `CollisionLayers`
+fn is_weapon(layers: CollisionLayers) -> bool {
+    layers.contains_group(GameLayer::Weapon) && !layers.contains_group(GameLayer::Enemies)
+}
+
+fn is_enemy(layers: CollisionLayers) -> bool {
+    !layers.contains_group(GameLayer::Player) && layers.contains_group(GameLayer::Enemies)
 }
 
 fn gems_player_attraction(
@@ -432,10 +455,15 @@ pub struct LootAllGemsFor(Timer);
 pub struct RotationRadian(f32);
 
 #[derive(Default, Component)]
-pub struct Velocity(Vec2);
-
-#[derive(Default, Component)]
 pub struct MoveToPlayer(bool);
 
 #[derive(Component)]
 pub struct Health(pub usize);
+
+#[derive(PhysicsLayer)]
+pub enum GameLayer {
+    Player,
+    Weapon,
+    Enemies,
+    Loot,
+}
