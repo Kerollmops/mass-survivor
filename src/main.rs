@@ -2,14 +2,11 @@ use std::f32::consts::PI;
 
 use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
-use bevy::transform::TransformSystem;
 use bevy_asset_loader::AssetLoader;
 use heron::prelude::*;
-use rand::Rng;
 
 use self::assets::*;
 use self::enemies::*;
-use self::game_sprites::*;
 use self::helper::*;
 
 mod assets;
@@ -19,7 +16,6 @@ mod helper;
 
 const MAP_SIZE: u32 = 41;
 const GRID_WIDTH: f32 = 0.05;
-const SLOW_DOWN: f32 = 4.0;
 const PLAYER_SPEED: f32 = 10.0;
 
 const HEALTHY_PLAYER_COLOR: Color = Color::rgb(0., 0.47, 1.);
@@ -50,13 +46,12 @@ fn main() {
                 .with_system(slow_walking_movement)
                 .with_system(running_group_movement)
                 .with_system(spawn_enemy_waves)
-                // .with_system(create_loot)
-                // .with_system(player_loot_stuff)
+                .with_system(create_loot)
+                .with_system(player_loot_stuff)
                 .with_system(axe_head_kill_ennemies)
                 .with_system(rotate_axe_head)
                 .with_system(change_player_color)
-                // .with_system(player_loot_gems)
-                // .with_system(ennemies_repulsion)
+                .with_system(player_loot_gems)
                 .with_system(gems_player_attraction),
         )
         .run();
@@ -160,11 +155,11 @@ fn spawn_player(mut commands: Commands) {
         .insert(RigidBody::Dynamic)
         .insert(CollisionShape::Cuboid { half_extends: Vec3::splat(0.5), border_radius: None })
         .insert(RotationConstraints::lock())
-        .insert(
-            CollisionLayers::none()
-                .with_group(GameLayer::Player)
-                .with_masks(&[GameLayer::Loot, GameLayer::Enemies]),
-        )
+        .insert(CollisionLayers::none().with_group(GameLayer::Player).with_masks(&[
+            GameLayer::Gem,
+            GameLayer::Stuff,
+            GameLayer::Enemies,
+        ]))
         .insert(Player::default())
         .with_children(|commands| {
             commands
@@ -255,90 +250,37 @@ fn change_player_color(
     player_sprite.color = HEALTHY_PLAYER_COLOR;
 }
 
-// fn change_player_color(
-//     mut player_query: Query<(&mut Sprite, &CollisionShape), With<Player>>,
-//     ennemies_query: Query<&CollisionShape, With<Enemy>>,
-// ) {
-//     let (mut player_sprite, player_shape) = match player_query.iter_mut().next() {
-//         Some(value) => value,
-//         None => return,
-//     };
+fn create_loot(
+    mut commands: Commands,
+    iconset_assets: Res<IconsetAssets>,
+    mut player_query: Query<(&mut Player, &Transform)>,
+) {
+    let (mut player, transform) = match player_query.iter_mut().next() {
+        Some(value) => value,
+        None => return,
+    };
 
-//     if ennemies_query.iter().any(|shape| shape.is_collided_with(player_shape)) {
-//         player_sprite.color = HIT_PLAYER_COLOR;
-//     } else {
-//         player_sprite.color = HEALTHY_PLAYER_COLOR;
-//     }
-// }
+    let mut rng = rand::thread_rng();
+    if !player.lvl1_stuff_generated && player.xp >= 30 {
+        player.lvl1_stuff_generated = true;
+        let pos = random_in_radius(&mut rng, transform.translation, 5.);
+        let pos = move_from_deadzone(pos, 3.).extend(95.);
 
-// fn player_loot_gems(
-//     mut commands: Commands,
-//     mut player_query: Query<(&mut Player, &CollisionShape)>,
-//     gems_query: Query<(Entity, &CollisionShape), With<Gem>>,
-// ) {
-//     let (mut player, player_shape) = match player_query.iter_mut().next() {
-//         Some(value) => value,
-//         None => return,
-//     };
-
-//     for (gem_entity, shape) in gems_query.iter() {
-//         if shape.is_collided_with(player_shape) {
-//             player.xp += 1;
-//             commands.entity(gem_entity).despawn();
-//         }
-//     }
-// }
-
-// fn create_loot(
-//     mut commands: Commands,
-//     iconset_assets: Res<IconsetAssets>,
-//     mut player_query: Query<(&mut Player, &Transform)>,
-// ) {
-//     let (mut player, transform) = match player_query.iter_mut().next() {
-//         Some(value) => value,
-//         None => return,
-//     };
-
-//     let mut rng = rand::thread_rng();
-//     if !player.lvl1_stuff_generated && player.xp >= 30 {
-//         player.lvl1_stuff_generated = true;
-//         let pos = random_in_radius(&mut rng, transform.translation, 5.);
-//         let pos = move_from_deadzone(pos, 3.).extend(95.);
-
-//         commands
-//             .spawn_bundle(SpriteSheetBundle {
-//                 transform: Transform::from_translation(pos).with_scale(Vec3::splat(0.04)),
-//                 sprite: TextureAtlasSprite::new(864),
-//                 texture_atlas: iconset_assets.iconset_fantasy_castshadows.clone(),
-//                 ..Default::default()
-//             })
-//             .insert(CollisionShape::new_rectangle(2., 2.))
-//             .insert(Stuff::FishingRod);
-//     }
-// }
-
-// fn player_loot_stuff(
-//     mut commands: Commands,
-//     mut loot_all_gems: ResMut<LootAllGemsFor>,
-//     mut player_query: Query<(&mut Player, &CollisionShape)>,
-//     stuff_query: Query<(Entity, &Stuff, &CollisionShape)>,
-// ) {
-//     let (_player, player_shape) = match player_query.iter_mut().next() {
-//         Some(value) => value,
-//         None => return,
-//     };
-
-//     for (stuff_entity, stuff, shape) in stuff_query.iter() {
-//         if shape.is_collided_with(player_shape) {
-//             match stuff {
-//                 Stuff::FishingRod => {
-//                     *loot_all_gems = LootAllGemsFor(Timer::from_seconds(2., false))
-//                 }
-//             }
-//             commands.entity(stuff_entity).despawn();
-//         }
-//     }
-// }
+        commands
+            .spawn_bundle(SpriteSheetBundle {
+                transform: Transform::from_translation(pos).with_scale(Vec3::splat(0.04)),
+                sprite: TextureAtlasSprite::new(864),
+                texture_atlas: iconset_assets.iconset_fantasy_castshadows.clone(),
+                ..Default::default()
+            })
+            .insert(RigidBody::Sensor)
+            .insert(CollisionShape::Cuboid { half_extends: Vec3::splat(0.5), border_radius: None })
+            .insert(
+                CollisionLayers::none().with_group(GameLayer::Stuff).with_mask(GameLayer::Player),
+            )
+            .insert(Stuff::FishingRod);
+    }
+}
 
 fn axe_head_kill_ennemies(
     mut commands: Commands,
@@ -352,9 +294,9 @@ fn axe_head_kill_ennemies(
         .filter_map(|event| {
             let (entity_1, entity_2) = event.rigid_body_entities();
             let (layers_1, layers_2) = event.collision_layers();
-            if is_weapon(layers_1) && is_enemy(layers_2) {
+            if is_weapon_layer(layers_1) && is_enemy_layer(layers_2) {
                 Some(entity_2)
-            } else if is_weapon(layers_2) && is_enemy(layers_1) {
+            } else if is_weapon_layer(layers_2) && is_enemy_layer(layers_1) {
                 Some(entity_1)
             } else {
                 None
@@ -372,19 +314,91 @@ fn axe_head_kill_ennemies(
                         ..Default::default()
                     })
                     .insert(MoveToPlayer::default())
+                    .insert(RigidBody::Sensor)
+                    .insert(CollisionShape::Sphere { radius: 0.25 })
+                    .insert(
+                        CollisionLayers::none()
+                            .with_group(GameLayer::Gem)
+                            .with_mask(GameLayer::Player),
+                    )
                     .insert(Gem);
             }
         });
 }
 
-// Note: We check both layers each time to avoid a false-positive
-// that can occur if an entity has the default (unconfigured) `CollisionLayers`
-fn is_weapon(layers: CollisionLayers) -> bool {
-    layers.contains_group(GameLayer::Weapon) && !layers.contains_group(GameLayer::Enemies)
+fn player_loot_gems(
+    mut commands: Commands,
+    mut player_query: Query<&mut Player>,
+    mut events: EventReader<CollisionEvent>,
+) {
+    let mut player = player_query.single_mut();
+
+    events
+        .iter()
+        .filter(|e| e.is_started())
+        .filter_map(|event| {
+            let (entity_1, entity_2) = event.rigid_body_entities();
+            let (layers_1, layers_2) = event.collision_layers();
+            if is_player_layer(layers_1) && is_gem_layer(layers_2) {
+                Some(entity_2)
+            } else if is_player_layer(layers_2) && is_gem_layer(layers_1) {
+                Some(entity_1)
+            } else {
+                None
+            }
+        })
+        .for_each(|gem_entity| {
+            player.xp += 1;
+            commands.entity(gem_entity).despawn();
+        });
 }
 
-fn is_enemy(layers: CollisionLayers) -> bool {
-    !layers.contains_group(GameLayer::Player) && layers.contains_group(GameLayer::Enemies)
+fn player_loot_stuff(
+    mut commands: Commands,
+    mut loot_all_gems: ResMut<LootAllGemsFor>,
+    mut events: EventReader<CollisionEvent>,
+    stuff_query: Query<&Stuff>,
+) {
+    events
+        .iter()
+        .filter(|e| e.is_started())
+        .filter_map(|event| {
+            let (entity_1, entity_2) = event.rigid_body_entities();
+            let (layers_1, layers_2) = event.collision_layers();
+            if is_player_layer(layers_1) && is_stuff_layer(layers_2) {
+                Some(entity_2)
+            } else if is_player_layer(layers_2) && is_stuff_layer(layers_1) {
+                Some(entity_1)
+            } else {
+                None
+            }
+        })
+        .for_each(|entity| {
+            if let Ok(Stuff::FishingRod) = stuff_query.get_component::<Stuff>(entity) {
+                *loot_all_gems = LootAllGemsFor(Timer::from_seconds(5., false));
+            }
+            commands.entity(entity).despawn();
+        });
+}
+
+fn is_player_layer(layers: CollisionLayers) -> bool {
+    layers.contains_group(GameLayer::Player)
+}
+
+fn is_weapon_layer(layers: CollisionLayers) -> bool {
+    layers.contains_group(GameLayer::Weapon)
+}
+
+fn is_enemy_layer(layers: CollisionLayers) -> bool {
+    layers.contains_group(GameLayer::Enemies)
+}
+
+fn is_stuff_layer(layers: CollisionLayers) -> bool {
+    layers.contains_group(GameLayer::Stuff)
+}
+
+fn is_gem_layer(layers: CollisionLayers) -> bool {
+    layers.contains_group(GameLayer::Gem)
 }
 
 fn gems_player_attraction(
@@ -393,10 +407,7 @@ fn gems_player_attraction(
     player_query: Query<&Transform, With<Player>>,
     mut gems_query: Query<(&mut Transform, &mut MoveToPlayer), (With<Gem>, Without<Player>)>,
 ) {
-    let player_transform = match player_query.iter().next() {
-        Some(transform) => transform,
-        None => return,
-    };
+    let player_transform = player_query.single();
 
     loot_all_gems.0.tick(time.delta());
 
@@ -465,5 +476,6 @@ pub enum GameLayer {
     Player,
     Weapon,
     Enemies,
-    Loot,
+    Gem,
+    Stuff,
 }
