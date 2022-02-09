@@ -97,7 +97,7 @@ impl EnemyBundle {
             game_sprite,
             velocity: Velocity::default(),
             rigid_body: RigidBody::Dynamic,
-            damping: Damping::from_linear(0.5),
+            damping: Damping::from_linear(1.),
             physic_material: PhysicMaterial { density: 10.0, ..Default::default() },
             collision_shape: CollisionShape::Cuboid {
                 half_extends: Vec3::new(0.3, 0.3, 0.),
@@ -128,7 +128,7 @@ impl EnemyBundle {
             game_sprite,
             velocity: Velocity::default(),
             rigid_body: RigidBody::Dynamic,
-            damping: Damping::from_linear(0.5),
+            damping: Damping::from_linear(1.),
             physic_material: PhysicMaterial { density: 10.0, ..Default::default() },
             collision_shape: CollisionShape::Cuboid {
                 half_extends: Vec3::new(0.6, 0.6, 0.),
@@ -159,7 +159,7 @@ impl EnemyBundle {
             game_sprite,
             velocity: Velocity::default(),
             rigid_body: RigidBody::Dynamic,
-            damping: Damping::from_linear(0.5),
+            damping: Damping::from_linear(1.),
             physic_material: PhysicMaterial { density: 10.0, ..Default::default() },
             collision_shape: CollisionShape::Cuboid {
                 half_extends: Vec3::new(0.3, 0.3, 0.),
@@ -191,7 +191,7 @@ impl EnemyBundle {
             game_sprite,
             velocity: Velocity::default(),
             rigid_body: RigidBody::Dynamic,
-            damping: Damping::from_linear(0.5),
+            damping: Damping::from_linear(1.),
             physic_material: PhysicMaterial { density: 10.0, ..Default::default() },
             collision_shape: CollisionShape::Cuboid {
                 half_extends: Vec3::new(0.3, 0.3, 0.),
@@ -223,7 +223,7 @@ impl EnemyBundle {
             game_sprite,
             velocity: Velocity::default(),
             rigid_body: RigidBody::Dynamic,
-            damping: Damping::from_linear(0.5),
+            damping: Damping::from_linear(1.),
             physic_material: PhysicMaterial { density: 10.0, ..Default::default() },
             collision_shape: CollisionShape::Cuboid {
                 half_extends: Vec3::new(0.3, 0.3, 0.),
