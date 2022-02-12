@@ -37,6 +37,7 @@ fn main() {
         .add_system_set(SystemSet::on_enter(MyStates::Next).with_system(spawn_ennemies))
         .add_system_set(
             SystemSet::on_update(MyStates::Next)
+                .with_system(restart_fleet_animation)
                 .with_system(move_player)
                 .with_system(change_player_color)
                 .with_system(player_loot_gems),
@@ -84,26 +85,26 @@ fn setup(mut commands: Commands) {
     }
 }
 
-fn spawn_ennemies(mut commands: Commands, enemies_assets: Res<EnemiesAssets>) {
-    let small_demons_count = 12 * 3;
-    let mut rng = rand::thread_rng();
-
-    let start = Vec3::new(-5., 5., 90.);
+fn space_invader_animation(start: Vec3, width: f32, height: f32) -> Sequence<Transform> {
     let left_to_right = Tween::new(
         EaseMethod::Linear,
         TweeningType::Once,
         Duration::from_secs(4),
-        OneAxisTransformPositionLens { slide_on: Axis::X, start, end: Vec3::new(5., 5., 90.) },
+        OneAxisTransformPositionLens {
+            slide_on: Axis::X,
+            start,
+            end: start + Vec3::new(width, 0., 0.),
+        },
     );
 
-    let top_to_bottom = Tween::new(
+    let first_top_to_bottom = Tween::new(
         EaseMethod::Linear,
         TweeningType::Once,
         Duration::from_millis(50),
         OneAxisTransformPositionLens {
             slide_on: Axis::Y,
-            start: Vec3::new(5., 5., 90.),
-            end: Vec3::new(5., 5. - 0.8, 90.),
+            start: start + Vec3::new(width, 0., 0.),
+            end: start + Vec3::new(width, -height, 0.),
         },
     );
 
@@ -113,18 +114,38 @@ fn spawn_ennemies(mut commands: Commands, enemies_assets: Res<EnemiesAssets>) {
         Duration::from_secs(4),
         OneAxisTransformPositionLens {
             slide_on: Axis::X,
-            start: Vec3::new(5., 5. - 0.8, 90.),
-            end: start - Vec3::new(0., 0.8, 0.),
+            start: start + Vec3::new(width, -height, 0.),
+            end: start + Vec3::new(0., -height, 0.),
         },
     );
 
-    let tween = left_to_right.then(top_to_bottom).then(right_to_left);
+    let second_top_to_bottom = Tween::new(
+        EaseMethod::Linear,
+        TweeningType::Once,
+        Duration::from_millis(50),
+        OneAxisTransformPositionLens {
+            slide_on: Axis::Y,
+            start: start + Vec3::new(0., -height, 0.),
+            end: start + Vec3::new(0., -(height * 2.), 0.),
+        },
+    );
+
+    left_to_right.then(first_top_to_bottom).then(right_to_left).then(second_top_to_bottom)
+}
+
+fn spawn_ennemies(mut commands: Commands, enemies_assets: Res<EnemiesAssets>) {
+    let small_demons_count = 12 * 3;
+    let mut rng = rand::thread_rng();
+
+    let start = Vec3::new(-5., 5., 90.);
+    let tween = space_invader_animation(start, 10., 0.8);
 
     commands
         .spawn_bundle(FleetBundle {
             transform: Transform::from_translation(start),
             ..Default::default()
         })
+        .insert(Timer::new(tween.duration(), true))
         .insert(Animator::new(tween))
         .with_children(|parent| {
             for column in -5..=5 {
@@ -159,6 +180,18 @@ fn spawn_ennemies(mut commands: Commands, enemies_assets: Res<EnemiesAssets>) {
                 }
             }
         });
+}
+
+fn restart_fleet_animation(
+    time: Res<Time>,
+    mut query_fleet: Query<(&mut Timer, &mut Animator<Transform>, &Transform), With<Fleet>>,
+) {
+    for (mut timer, mut animator, transform) in query_fleet.iter_mut() {
+        if timer.tick(time.delta()).just_finished() {
+            let tween = space_invader_animation(transform.translation, 10., 0.8);
+            *animator = Animator::new(tween);
+        }
+    }
 }
 
 fn spawn_player(mut commands: Commands) {
