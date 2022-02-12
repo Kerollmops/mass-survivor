@@ -34,10 +34,11 @@ fn main() {
         .add_startup_system(setup)
         .add_startup_system(spawn_player)
         .add_system_to_stage(CoreStage::PostUpdate, camera_follow)
-        .add_system_set(SystemSet::on_enter(MyStates::Next).with_system(spawn_ennemies))
+        .add_system_set(SystemSet::on_enter(MyStates::Next).with_system(spawn_ennemies_fleet))
         .add_system_set(
             SystemSet::on_update(MyStates::Next)
                 .with_system(restart_fleet_animation)
+                .with_system(fleet_release_enemies)
                 .with_system(move_player)
                 .with_system(change_player_color)
                 .with_system(player_loot_gems),
@@ -133,7 +134,7 @@ fn space_invader_animation(start: Vec3, width: f32, height: f32) -> Sequence<Tra
     left_to_right.then(first_top_to_bottom).then(right_to_left).then(second_top_to_bottom)
 }
 
-fn spawn_ennemies(mut commands: Commands, enemies_assets: Res<EnemiesAssets>) {
+fn spawn_ennemies_fleet(mut commands: Commands, enemies_assets: Res<EnemiesAssets>) {
     let small_demons_count = 12 * 3;
     let mut rng = rand::thread_rng();
 
@@ -166,20 +167,30 @@ fn spawn_ennemies(mut commands: Commands, enemies_assets: Res<EnemiesAssets>) {
                         })
                         .insert(Velocity::default())
                         .insert(RigidBody::KinematicPositionBased)
-                        .insert(CollisionShape::Cuboid {
-                            half_extends: Vec3::splat(0.5),
-                            border_radius: None,
-                        })
+                        .insert(CollisionShape::Sphere { radius: 0.6 })
                         .insert(RotationConstraints::lock())
-                        .insert(
-                            CollisionLayers::none()
-                                .with_group(GameLayer::Enemies)
-                                .with_mask(GameLayer::Player),
-                        )
+                        .insert(CollisionLayers::none().with_group(GameLayer::Enemy).with_masks(&[
+                            GameLayer::Player,
+                            GameLayer::Enemy,
+                            GameLayer::ReleaseFleetEnemies,
+                        ]))
+                        .insert(FleetEnemy)
                         .insert(Enemy);
                 }
             }
         });
+
+    commands
+        .spawn()
+        .insert(Transform::from_translation(start + Vec3::new(5., -7., 90.)))
+        .insert(RigidBody::Sensor)
+        .insert(CollisionShape::Cuboid { half_extends: Vec3::new(5., 1., 1.), border_radius: None })
+        .insert(
+            CollisionLayers::none()
+                .with_group(GameLayer::ReleaseFleetEnemies)
+                .with_mask(GameLayer::Enemy),
+        )
+        .insert(GlobalTransform::default());
 }
 
 fn restart_fleet_animation(
@@ -212,7 +223,7 @@ fn spawn_player(mut commands: Commands) {
         .insert(CollisionLayers::none().with_group(GameLayer::Player).with_masks(&[
             GameLayer::Gem,
             GameLayer::Stuff,
-            GameLayer::Enemies,
+            GameLayer::Enemy,
         ]))
         .insert(Player::default());
 }
@@ -298,6 +309,80 @@ fn is_gem_layer(layers: CollisionLayers) -> bool {
     layers.contains_group(GameLayer::Gem)
 }
 
+fn is_release_fleet_layer(layers: CollisionLayers) -> bool {
+    layers.contains_group(GameLayer::ReleaseFleetEnemies)
+}
+
+fn is_enemy_layer(layers: CollisionLayers) -> bool {
+    layers.contains_group(GameLayer::Enemy)
+}
+
+fn fleet_release_enemies(
+    mut commands: Commands,
+    player_query: Query<&GlobalTransform, With<Player>>,
+    mut query_enemy: Query<
+        (
+            &mut Velocity,
+            &mut RotationConstraints,
+            &mut RigidBody,
+            &mut Transform,
+            &GlobalTransform,
+            &Parent,
+        ),
+        (With<Enemy>, With<FleetEnemy>),
+    >,
+    mut events: EventReader<CollisionEvent>,
+) {
+    events
+        .iter()
+        .filter(|e| e.is_started())
+        .filter_map(|event| {
+            let (entity_1, entity_2) = event.rigid_body_entities();
+            let (layers_1, layers_2) = event.collision_layers();
+            if is_release_fleet_layer(layers_1) && is_enemy_layer(layers_2) {
+                Some(entity_2)
+            } else if is_release_fleet_layer(layers_2) && is_enemy_layer(layers_1) {
+                Some(entity_1)
+            } else {
+                None
+            }
+        })
+        .for_each(|enemy_entity| {
+            // TODO prefer changing the collision layers.
+            if let Ok(_fleet_enemy) = query_enemy.get_component::<Parent>(enemy_entity) {
+                let parent = query_enemy.get_component::<Parent>(enemy_entity).unwrap();
+                commands.entity(parent.0).remove_children(&[enemy_entity]);
+
+                {
+                    let global_transform =
+                        *query_enemy.get_component::<GlobalTransform>(enemy_entity).unwrap();
+                    let mut transform =
+                        query_enemy.get_component_mut::<Transform>(enemy_entity).unwrap();
+                    *transform.translation = *global_transform.translation;
+                }
+
+                let enemy_transform =
+                    *query_enemy.get_component_mut::<Transform>(enemy_entity).unwrap();
+                let mut velocity = query_enemy.get_component_mut::<Velocity>(enemy_entity).unwrap();
+                velocity.angular = AxisAngle::new(Vec3::Z * 0.01, 6.);
+                let player_transform = player_query.single();
+                velocity.linear = (player_transform.translation - enemy_transform.translation)
+                    .normalize_or_zero()
+                    * 2.0;
+
+                let mut rotation_constraints =
+                    query_enemy.get_component_mut::<RotationConstraints>(enemy_entity).unwrap();
+                *rotation_constraints = RotationConstraints::allow();
+
+                let mut rigid_body =
+                    query_enemy.get_component_mut::<RigidBody>(enemy_entity).unwrap();
+                *rigid_body = RigidBody::Dynamic;
+
+                commands.entity(enemy_entity).remove::<FleetEnemy>();
+            }
+        });
+}
+
 fn camera_follow(
     player_query: Query<&Transform, With<Player>>,
     mut camera_query: Query<&mut Transform, (With<Camera>, Without<Player>)>,
@@ -320,6 +405,9 @@ enum MyStates {
 
 #[derive(Component)]
 pub struct Enemy;
+
+#[derive(Component)]
+pub struct FleetEnemy;
 
 #[derive(Default, Component)]
 pub struct Fleet;
@@ -360,7 +448,8 @@ pub struct Health(pub usize);
 pub enum GameLayer {
     Player,
     Weapon,
-    Enemies,
+    Enemy,
+    ReleaseFleetEnemies,
     Gem,
     Stuff,
 }
