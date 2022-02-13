@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy_asset_loader::AssetLoader;
 use bevy_tweening::*;
 use heron::prelude::*;
+use ordered_float::NotNan;
 use rand::Rng;
 
 use self::animations::*;
@@ -184,6 +185,7 @@ fn free_enemies_from_fleets(
     }
 }
 
+// Find the nearest player by using the squared distance (faster to compute)
 fn follow_nearest_player(
     player_query: Query<&GlobalTransform, With<Player>>,
     mut enemy_query: Query<
@@ -191,13 +193,19 @@ fn follow_nearest_player(
         With<FollowNearestPlayer>,
     >,
 ) {
-    let player_transform = player_query.single();
-
     for (transform, mut velocity, mut acceleration, max_speed) in enemy_query.iter_mut() {
         let MaxSpeed(max_speed) = *max_speed;
-        let direction = (player_transform.translation - transform.translation).normalize_or_zero();
-        velocity.linear = velocity.linear.clamp(Vec3::splat(-max_speed), Vec3::splat(max_speed));
-        acceleration.linear = direction * 7.;
+        match player_query.iter().min_by_key(|pt| {
+            NotNan::new(pt.translation.distance_squared(transform.translation)).unwrap()
+        }) {
+            Some(pt) => {
+                let direction = (pt.translation - transform.translation).normalize_or_zero();
+                let limit = Vec3::splat(max_speed);
+                velocity.linear = velocity.linear.clamp(-limit, limit);
+                acceleration.linear = direction * 7.;
+            }
+            None => acceleration.linear = Vec3::ZERO,
+        }
     }
 }
 
@@ -306,6 +314,18 @@ enum MyStates {
 pub struct Enemy;
 
 #[derive(Component)]
+pub struct Health {
+    pub current: usize,
+    pub max: usize,
+}
+
+impl Health {
+    pub fn new(max: usize) -> Health {
+        Health { current: max, max }
+    }
+}
+
+#[derive(Component)]
 pub struct MaxSpeed(f32);
 
 #[derive(Component)]
@@ -331,9 +351,6 @@ pub struct Gem;
 
 #[derive(Default, Component)]
 pub struct FollowNearestPlayer;
-
-#[derive(Component)]
-pub struct Health(pub usize);
 
 #[derive(PhysicsLayer)]
 pub enum GameLayer {
