@@ -37,6 +37,7 @@ fn main() {
         .add_system_set(
             SystemSet::on_update(MyStates::Next)
                 .with_system(free_enemies_from_fleets)
+                .with_system(follow_nearest_player)
                 .with_system(move_player)
                 .with_system(change_player_color)
                 .with_system(player_loot_gems),
@@ -84,12 +85,35 @@ fn setup(mut commands: Commands) {
     }
 }
 
+fn spawn_player(mut commands: Commands) {
+    commands
+        .spawn_bundle(SpriteBundle {
+            transform: Transform::from_translation(Vec3::new(0., 0., 100.)),
+            sprite: Sprite {
+                color: HEALTHY_PLAYER_COLOR,
+                custom_size: Some(Vec2::new(1., 1.)),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .insert(Velocity::default())
+        .insert(RigidBody::Dynamic)
+        .insert(CollisionShape::Cuboid { half_extends: Vec3::splat(0.5), border_radius: None })
+        .insert(RotationConstraints::lock())
+        .insert(CollisionLayers::none().with_group(GameLayer::Player).with_masks(&[
+            GameLayer::Gem,
+            GameLayer::Stuff,
+            GameLayer::Enemy,
+        ]))
+        .insert(Player::default());
+}
+
 fn spawn_ennemies_fleet(mut commands: Commands, enemies_assets: Res<EnemiesAssets>) {
     let small_demons_count = 12 * 3;
     let mut rng = rand::thread_rng();
 
     let start = Vec3::new(-5., 5., 90.);
-    let tween = space_invader_animation(start, 5, 10., 0.8);
+    let tween = space_invader_animation(start, 3, 10., 0.8);
 
     commands
         .spawn_bundle(FleetBundle {
@@ -116,7 +140,10 @@ fn spawn_ennemies_fleet(mut commands: Commands, enemies_assets: Res<EnemiesAsset
                             ..Default::default()
                         })
                         .insert(Velocity::default())
+                        .insert(Acceleration::default())
+                        .insert(MaxSpeed(rng.gen_range(0.2..=2.4)))
                         .insert(RigidBody::KinematicPositionBased)
+                        .insert(Damping::from_linear(1.))
                         .insert(CollisionShape::Sphere { radius: 0.6 })
                         .insert(RotationConstraints::lock())
                         .insert(
@@ -134,37 +161,22 @@ fn spawn_ennemies_fleet(mut commands: Commands, enemies_assets: Res<EnemiesAsset
 fn free_enemies_from_fleets(
     mut commands: Commands,
     time: Res<Time>,
-    player_query: Query<&GlobalTransform, With<Player>>,
     mut query_fleet: Query<(&mut Timer, Entity, &Children), With<Fleet>>,
     mut query_enemy: Query<
-        (&mut Velocity, &mut RotationConstraints, &mut RigidBody, &mut Transform, &GlobalTransform),
+        (&mut RigidBody, &mut Transform, &GlobalTransform),
         (With<Enemy>, With<InFleet>),
     >,
 ) {
-    let player_transform = player_query.single();
-
     for (mut timer, parent, children) in query_fleet.iter_mut() {
         if timer.tick(time.delta()).finished() {
             commands.entity(parent).remove_children(children);
 
             for child in children.iter().copied() {
-                // TODO do not change the velocity here, declare a FollowNearestPlayer marker
-                let (
-                    mut velocity,
-                    mut rotation_constraints,
-                    mut rigid_body,
-                    mut transform,
-                    global_transform,
-                ) = query_enemy.get_mut(child).unwrap();
-
+                let (mut rigid_body, mut transform, global_transform) =
+                    query_enemy.get_mut(child).unwrap();
                 *transform.translation = *global_transform.translation;
-                velocity.angular = AxisAngle::new(Vec3::Z * 0.01, 6.);
-                velocity.linear = (player_transform.translation - transform.translation)
-                    .normalize_or_zero()
-                    * 2.0;
-                *rotation_constraints = RotationConstraints::allow();
                 *rigid_body = RigidBody::Dynamic;
-                commands.entity(child).remove::<InFleet>();
+                commands.entity(child).insert(FollowNearestPlayer).remove::<InFleet>();
             }
 
             commands.entity(parent).despawn_recursive();
@@ -172,27 +184,21 @@ fn free_enemies_from_fleets(
     }
 }
 
-fn spawn_player(mut commands: Commands) {
-    commands
-        .spawn_bundle(SpriteBundle {
-            transform: Transform::from_translation(Vec3::new(0., 0., 100.)),
-            sprite: Sprite {
-                color: HEALTHY_PLAYER_COLOR,
-                custom_size: Some(Vec2::new(1., 1.)),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .insert(Velocity::default())
-        .insert(RigidBody::Dynamic)
-        .insert(CollisionShape::Cuboid { half_extends: Vec3::splat(0.5), border_radius: None })
-        .insert(RotationConstraints::lock())
-        .insert(CollisionLayers::none().with_group(GameLayer::Player).with_masks(&[
-            GameLayer::Gem,
-            GameLayer::Stuff,
-            GameLayer::Enemy,
-        ]))
-        .insert(Player::default());
+fn follow_nearest_player(
+    player_query: Query<&GlobalTransform, With<Player>>,
+    mut enemy_query: Query<
+        (&Transform, &mut Velocity, &mut Acceleration, &MaxSpeed),
+        With<FollowNearestPlayer>,
+    >,
+) {
+    let player_transform = player_query.single();
+
+    for (transform, mut velocity, mut acceleration, max_speed) in enemy_query.iter_mut() {
+        let MaxSpeed(max_speed) = *max_speed;
+        let direction = (player_transform.translation - transform.translation).normalize_or_zero();
+        velocity.linear = velocity.linear.clamp(Vec3::splat(-max_speed), Vec3::splat(max_speed));
+        acceleration.linear = direction * 7.;
+    }
 }
 
 fn move_player(keys: Res<Input<KeyCode>>, mut player_query: Query<&mut Velocity, With<Player>>) {
@@ -300,6 +306,9 @@ enum MyStates {
 pub struct Enemy;
 
 #[derive(Component)]
+pub struct MaxSpeed(f32);
+
+#[derive(Component)]
 pub struct InFleet;
 
 #[derive(Default, Component)]
@@ -320,19 +329,8 @@ pub struct Player {
 #[derive(Component)]
 pub struct Gem;
 
-#[derive(Component)]
-pub enum Stuff {
-    FishingRod,
-}
-
-#[derive(Component)]
-pub struct AxeHead;
-
-#[derive(Component)]
-pub struct RotationRadian(f32);
-
 #[derive(Default, Component)]
-pub struct MoveToPlayer(bool);
+pub struct FollowNearestPlayer;
 
 #[derive(Component)]
 pub struct Health(pub usize);
