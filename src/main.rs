@@ -1,14 +1,13 @@
-use std::time::Duration;
-
 use bevy::prelude::*;
 use bevy_asset_loader::AssetLoader;
-use bevy_tweening::lens::*;
 use bevy_tweening::*;
 use heron::prelude::*;
 use rand::Rng;
 
+use self::animations::*;
 use self::assets::*;
 
+mod animations;
 mod assets;
 
 const MAP_SIZE: u32 = 41;
@@ -37,8 +36,7 @@ fn main() {
         .add_system_set(SystemSet::on_enter(MyStates::Next).with_system(spawn_ennemies_fleet))
         .add_system_set(
             SystemSet::on_update(MyStates::Next)
-                .with_system(restart_fleet_animation)
-                .with_system(fleet_release_enemies)
+                .with_system(free_enemies_from_fleets)
                 .with_system(move_player)
                 .with_system(change_player_color)
                 .with_system(player_loot_gems),
@@ -86,67 +84,19 @@ fn setup(mut commands: Commands) {
     }
 }
 
-fn space_invader_animation(start: Vec3, width: f32, height: f32) -> Sequence<Transform> {
-    let left_to_right = Tween::new(
-        EaseMethod::Linear,
-        TweeningType::Once,
-        Duration::from_secs(4),
-        OneAxisTransformPositionLens {
-            slide_on: Axis::X,
-            start,
-            end: start + Vec3::new(width, 0., 0.),
-        },
-    );
-
-    let first_top_to_bottom = Tween::new(
-        EaseMethod::Linear,
-        TweeningType::Once,
-        Duration::from_millis(50),
-        OneAxisTransformPositionLens {
-            slide_on: Axis::Y,
-            start: start + Vec3::new(width, 0., 0.),
-            end: start + Vec3::new(width, -height, 0.),
-        },
-    );
-
-    let right_to_left = Tween::new(
-        EaseMethod::Linear,
-        TweeningType::Once,
-        Duration::from_secs(4),
-        OneAxisTransformPositionLens {
-            slide_on: Axis::X,
-            start: start + Vec3::new(width, -height, 0.),
-            end: start + Vec3::new(0., -height, 0.),
-        },
-    );
-
-    let second_top_to_bottom = Tween::new(
-        EaseMethod::Linear,
-        TweeningType::Once,
-        Duration::from_millis(50),
-        OneAxisTransformPositionLens {
-            slide_on: Axis::Y,
-            start: start + Vec3::new(0., -height, 0.),
-            end: start + Vec3::new(0., -(height * 2.), 0.),
-        },
-    );
-
-    left_to_right.then(first_top_to_bottom).then(right_to_left).then(second_top_to_bottom)
-}
-
 fn spawn_ennemies_fleet(mut commands: Commands, enemies_assets: Res<EnemiesAssets>) {
     let small_demons_count = 12 * 3;
     let mut rng = rand::thread_rng();
 
     let start = Vec3::new(-5., 5., 90.);
-    let tween = space_invader_animation(start, 10., 0.8);
+    let tween = space_invader_animation(start, 5, 10., 0.8);
 
     commands
         .spawn_bundle(FleetBundle {
             transform: Transform::from_translation(start),
             ..Default::default()
         })
-        .insert(Timer::new(tween.duration(), true))
+        .insert(Timer::new(tween.duration(), false))
         .insert(Animator::new(tween))
         .with_children(|parent| {
             for column in -5..=5 {
@@ -169,38 +119,55 @@ fn spawn_ennemies_fleet(mut commands: Commands, enemies_assets: Res<EnemiesAsset
                         .insert(RigidBody::KinematicPositionBased)
                         .insert(CollisionShape::Sphere { radius: 0.6 })
                         .insert(RotationConstraints::lock())
-                        .insert(CollisionLayers::none().with_group(GameLayer::Enemy).with_masks(&[
-                            GameLayer::Player,
-                            GameLayer::Enemy,
-                            GameLayer::ReleaseFleetEnemies,
-                        ]))
-                        .insert(FleetEnemy)
+                        .insert(
+                            CollisionLayers::none()
+                                .with_group(GameLayer::Enemy)
+                                .with_masks(&[GameLayer::Player, GameLayer::Enemy]),
+                        )
+                        .insert(InFleet)
                         .insert(Enemy);
                 }
             }
         });
-
-    commands
-        .spawn()
-        .insert(Transform::from_translation(start + Vec3::new(5., -7., 90.)))
-        .insert(RigidBody::Sensor)
-        .insert(CollisionShape::Cuboid { half_extends: Vec3::new(5., 1., 1.), border_radius: None })
-        .insert(
-            CollisionLayers::none()
-                .with_group(GameLayer::ReleaseFleetEnemies)
-                .with_mask(GameLayer::Enemy),
-        )
-        .insert(GlobalTransform::default());
 }
 
-fn restart_fleet_animation(
+fn free_enemies_from_fleets(
+    mut commands: Commands,
     time: Res<Time>,
-    mut query_fleet: Query<(&mut Timer, &mut Animator<Transform>, &Transform), With<Fleet>>,
+    player_query: Query<&GlobalTransform, With<Player>>,
+    mut query_fleet: Query<(&mut Timer, Entity, &Children), With<Fleet>>,
+    mut query_enemy: Query<
+        (&mut Velocity, &mut RotationConstraints, &mut RigidBody, &mut Transform, &GlobalTransform),
+        (With<Enemy>, With<InFleet>),
+    >,
 ) {
-    for (mut timer, mut animator, transform) in query_fleet.iter_mut() {
-        if timer.tick(time.delta()).just_finished() {
-            let tween = space_invader_animation(transform.translation, 10., 0.8);
-            *animator = Animator::new(tween);
+    let player_transform = player_query.single();
+
+    for (mut timer, parent, children) in query_fleet.iter_mut() {
+        if timer.tick(time.delta()).finished() {
+            commands.entity(parent).remove_children(children);
+
+            for child in children.iter().copied() {
+                // TODO do not change the velocity here, declare a FollowNearestPlayer marker
+                let (
+                    mut velocity,
+                    mut rotation_constraints,
+                    mut rigid_body,
+                    mut transform,
+                    global_transform,
+                ) = query_enemy.get_mut(child).unwrap();
+
+                *transform.translation = *global_transform.translation;
+                velocity.angular = AxisAngle::new(Vec3::Z * 0.01, 6.);
+                velocity.linear = (player_transform.translation - transform.translation)
+                    .normalize_or_zero()
+                    * 2.0;
+                *rotation_constraints = RotationConstraints::allow();
+                *rigid_body = RigidBody::Dynamic;
+                commands.entity(child).remove::<InFleet>();
+            }
+
+            commands.entity(parent).despawn_recursive();
         }
     }
 }
@@ -309,80 +276,6 @@ fn is_gem_layer(layers: CollisionLayers) -> bool {
     layers.contains_group(GameLayer::Gem)
 }
 
-fn is_release_fleet_layer(layers: CollisionLayers) -> bool {
-    layers.contains_group(GameLayer::ReleaseFleetEnemies)
-}
-
-fn is_enemy_layer(layers: CollisionLayers) -> bool {
-    layers.contains_group(GameLayer::Enemy)
-}
-
-fn fleet_release_enemies(
-    mut commands: Commands,
-    player_query: Query<&GlobalTransform, With<Player>>,
-    mut query_enemy: Query<
-        (
-            &mut Velocity,
-            &mut RotationConstraints,
-            &mut RigidBody,
-            &mut Transform,
-            &GlobalTransform,
-            &Parent,
-        ),
-        (With<Enemy>, With<FleetEnemy>),
-    >,
-    mut events: EventReader<CollisionEvent>,
-) {
-    events
-        .iter()
-        .filter(|e| e.is_started())
-        .filter_map(|event| {
-            let (entity_1, entity_2) = event.rigid_body_entities();
-            let (layers_1, layers_2) = event.collision_layers();
-            if is_release_fleet_layer(layers_1) && is_enemy_layer(layers_2) {
-                Some(entity_2)
-            } else if is_release_fleet_layer(layers_2) && is_enemy_layer(layers_1) {
-                Some(entity_1)
-            } else {
-                None
-            }
-        })
-        .for_each(|enemy_entity| {
-            // TODO prefer changing the collision layers.
-            if let Ok(_fleet_enemy) = query_enemy.get_component::<Parent>(enemy_entity) {
-                let parent = query_enemy.get_component::<Parent>(enemy_entity).unwrap();
-                commands.entity(parent.0).remove_children(&[enemy_entity]);
-
-                {
-                    let global_transform =
-                        *query_enemy.get_component::<GlobalTransform>(enemy_entity).unwrap();
-                    let mut transform =
-                        query_enemy.get_component_mut::<Transform>(enemy_entity).unwrap();
-                    *transform.translation = *global_transform.translation;
-                }
-
-                let enemy_transform =
-                    *query_enemy.get_component_mut::<Transform>(enemy_entity).unwrap();
-                let mut velocity = query_enemy.get_component_mut::<Velocity>(enemy_entity).unwrap();
-                velocity.angular = AxisAngle::new(Vec3::Z * 0.01, 6.);
-                let player_transform = player_query.single();
-                velocity.linear = (player_transform.translation - enemy_transform.translation)
-                    .normalize_or_zero()
-                    * 2.0;
-
-                let mut rotation_constraints =
-                    query_enemy.get_component_mut::<RotationConstraints>(enemy_entity).unwrap();
-                *rotation_constraints = RotationConstraints::allow();
-
-                let mut rigid_body =
-                    query_enemy.get_component_mut::<RigidBody>(enemy_entity).unwrap();
-                *rigid_body = RigidBody::Dynamic;
-
-                commands.entity(enemy_entity).remove::<FleetEnemy>();
-            }
-        });
-}
-
 fn camera_follow(
     player_query: Query<&Transform, With<Player>>,
     mut camera_query: Query<&mut Transform, (With<Camera>, Without<Player>)>,
@@ -407,7 +300,7 @@ enum MyStates {
 pub struct Enemy;
 
 #[derive(Component)]
-pub struct FleetEnemy;
+pub struct InFleet;
 
 #[derive(Default, Component)]
 pub struct Fleet;
@@ -449,38 +342,6 @@ pub enum GameLayer {
     Player,
     Weapon,
     Enemy,
-    ReleaseFleetEnemies,
     Gem,
     Stuff,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub enum Axis {
-    X,
-    Y,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct OneAxisTransformPositionLens {
-    slide_on: Axis,
-    start: Vec3,
-    end: Vec3,
-}
-
-impl Lens<Transform> for OneAxisTransformPositionLens {
-    fn lerp(&mut self, target: &mut Transform, ratio: f32) {
-        let value = self.start + (self.end - self.start) * ratio;
-
-        let axis = match self.slide_on {
-            Axis::X => target.translation[1],
-            Axis::Y => target.translation[0],
-        };
-
-        target.translation = value;
-
-        match self.slide_on {
-            Axis::X => target.translation[1] = axis,
-            Axis::Y => target.translation[0] = axis,
-        }
-    }
 }
