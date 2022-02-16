@@ -117,18 +117,24 @@ fn spawn_ennemies(
     mut animations: ResMut<Assets<SpriteSheetAnimation>>,
     animated_assets: Res<AnimatedAssets>,
 ) {
-    let mut i = 1;
+    let mut rng = rand::thread_rng();
+
     for x in -5..=5 {
         for y in -5..=5 {
             if x == 0 && y == 0 {
                 continue;
             }
 
-            let index = i * 25 + 1 + (1 * 4);
-            let animation_handle = animations.add(SpriteSheetAnimation::from_range(
-                index..=index + 3,
-                Duration::from_secs_f64(1.0 / 6.0),
-            ));
+            let elemental = Elemental::from_rng(&mut rng);
+            let animation = match rng.gen_range(0..6) {
+                0 => elemental.idle_animation(),
+                1 => elemental.walk_animation(),
+                2 => elemental.attack_animation(),
+                3 => elemental.hit_animation(),
+                4 => elemental.death_animation(),
+                _ => elemental.special_animation(),
+            };
+            let animation_handle = animations.add(animation);
 
             commands
                 .spawn_bundle(SpriteSheetBundle {
@@ -173,7 +179,7 @@ fn spawn_ennemies(
                         parent.spawn_bundle(SpriteSheetBundle {
                             transform: Transform::from_translation(Vec3::new(0., 1.25, 151.)),
                             sprite: TextureAtlasSprite {
-                                index: 8 * 25,
+                                index: elemental.head_sprite_index(),
                                 custom_size: Some(Vec2::new(0.5, 0.5)),
                                 ..Default::default()
                             },
@@ -182,8 +188,6 @@ fn spawn_ennemies(
                         });
                     }
                 });
-
-            i = (i + 1) % 9 + 1;
         }
     }
 }
