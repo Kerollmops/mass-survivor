@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+benimator = "2.0.1"
 bevy = "0.6.0"
 bevy_asset_loader = { version = "0.8.0", features = ["render"] }
 bevy_tweening = "0.3.1"

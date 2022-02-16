@@ -1,3 +1,7 @@
+use std::f32::consts::PI;
+use std::time::Duration;
+
+use benimator::*;
 use bevy::prelude::*;
 use bevy_asset_loader::AssetLoader;
 use bevy_tweening::*;
@@ -5,10 +9,8 @@ use heron::prelude::*;
 use ordered_float::NotNan;
 use rand::Rng;
 
-use self::animations::*;
 use self::assets::*;
 
-mod animations;
 mod assets;
 
 const MAP_SIZE: u32 = 41;
@@ -22,22 +24,22 @@ fn main() {
     let mut app = App::new();
     AssetLoader::new(MyStates::AssetLoading)
         .continue_to_state(MyStates::Next)
-        .with_collection::<EnemiesAssets>()
+        .with_collection::<AnimatedAssets>()
         .build(&mut app);
 
     app.add_state(MyStates::AssetLoading)
         .insert_resource(ClearColor(Color::rgb(0.53, 0.53, 0.53)))
         .add_plugins(DefaultPlugins)
+        .add_plugin(AnimationPlugin::default())
         .add_plugin(TweeningPlugin)
         .add_plugin(PhysicsPlugin::default())
         .insert_resource(Gravity::from(Vec3::ZERO))
         .add_startup_system(setup)
         .add_startup_system(spawn_player)
         .add_system_to_stage(CoreStage::PostUpdate, camera_follow)
-        .add_system_set(SystemSet::on_enter(MyStates::Next).with_system(spawn_ennemies_fleet))
+        .add_system_set(SystemSet::on_enter(MyStates::Next).with_system(spawn_ennemies))
         .add_system_set(
             SystemSet::on_update(MyStates::Next)
-                .with_system(free_enemies_from_fleets)
                 .with_system(follow_nearest_player)
                 .with_system(move_player)
                 .with_system(change_player_color)
@@ -109,78 +111,79 @@ fn spawn_player(mut commands: Commands) {
         .insert(Player::default());
 }
 
-fn spawn_ennemies_fleet(mut commands: Commands, enemies_assets: Res<EnemiesAssets>) {
-    let small_demons_count = 12 * 3;
-    let mut rng = rand::thread_rng();
+fn spawn_ennemies(
+    mut commands: Commands,
+    player_query: Query<&GlobalTransform, With<Player>>,
+    mut animations: ResMut<Assets<SpriteSheetAnimation>>,
+    animated_assets: Res<AnimatedAssets>,
+) {
+    let mut i = 1;
+    for x in -5..=5 {
+        for y in -5..=5 {
+            if x == 0 && y == 0 {
+                continue;
+            }
 
-    let start = Vec3::new(-5., 5., 90.);
-    let tween = space_invader_animation(start, 3, 10., 0.8);
+            let index = i * 25 + 1 + (1 * 4);
+            let animation_handle = animations.add(SpriteSheetAnimation::from_range(
+                index..=index + 3,
+                Duration::from_secs_f64(1.0 / 6.0),
+            ));
 
-    commands
-        .spawn_bundle(FleetBundle {
-            transform: Transform::from_translation(start),
-            ..Default::default()
-        })
-        .insert(Timer::new(tween.duration(), false))
-        .insert(Animator::new(tween))
-        .with_children(|parent| {
-            for column in -5..=5 {
-                for row in -2..=1 {
-                    let position = Vec3::new(column as f32, row as f32, 0.) * 1.2;
-                    let index = rng.gen_range(0..small_demons_count);
-
-                    parent
-                        .spawn_bundle(SpriteSheetBundle {
-                            transform: Transform::from_translation(position),
-                            sprite: TextureAtlasSprite {
-                                index,
-                                custom_size: Some(Vec2::new(1., 1.)),
+            commands
+                .spawn_bundle(SpriteSheetBundle {
+                    transform: Transform::from_translation(Vec3::new(x as f32, y as f32, 90.)),
+                    sprite: TextureAtlasSprite {
+                        custom_size: Some(Vec2::new(1., 1.)),
+                        ..Default::default()
+                    },
+                    texture_atlas: animated_assets.magic_elementals.clone(),
+                    ..Default::default()
+                })
+                // animation settings
+                .insert(animation_handle)
+                .insert(Play)
+                .insert(Velocity::default())
+                .insert(Acceleration::default())
+                .insert(MaxSpeed(0.2))
+                .insert(RigidBody::Dynamic)
+                .insert(Damping::from_linear(1.))
+                .insert(CollisionShape::Sphere { radius: 0.5 })
+                .insert(RotationConstraints::lock())
+                .insert(
+                    CollisionLayers::none()
+                        .with_group(GameLayer::Enemy)
+                        .with_masks(&[GameLayer::Player, GameLayer::Enemy]),
+                )
+                .insert(InFleet)
+                .insert(Enemy)
+                .with_children(|parent| {
+                    if x == 1 && y == 1 {
+                        parent.spawn_bundle(SpriteBundle {
+                            transform: Transform::from_translation(Vec3::new(0., 1.2, 150.))
+                                .with_rotation(Quat::from_rotation_z(PI / 4.)),
+                            sprite: Sprite {
+                                color: Color::WHITE,
+                                custom_size: Some(Vec2::new(0.8, 0.8)),
                                 ..Default::default()
                             },
-                            texture_atlas: enemies_assets.small_demons.clone(),
                             ..Default::default()
-                        })
-                        .insert(Velocity::default())
-                        .insert(Acceleration::default())
-                        .insert(MaxSpeed(rng.gen_range(0.2..=2.4)))
-                        .insert(RigidBody::KinematicPositionBased)
-                        .insert(Damping::from_linear(1.))
-                        .insert(CollisionShape::Sphere { radius: 0.6 })
-                        .insert(RotationConstraints::lock())
-                        .insert(
-                            CollisionLayers::none()
-                                .with_group(GameLayer::Enemy)
-                                .with_masks(&[GameLayer::Player, GameLayer::Enemy]),
-                        )
-                        .insert(InFleet)
-                        .insert(Enemy);
-                }
-            }
-        });
-}
+                        });
 
-fn free_enemies_from_fleets(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut query_fleet: Query<(&mut Timer, Entity, &Children), With<Fleet>>,
-    mut query_enemy: Query<
-        (&mut RigidBody, &mut Transform, &GlobalTransform),
-        (With<Enemy>, With<InFleet>),
-    >,
-) {
-    for (mut timer, parent, children) in query_fleet.iter_mut() {
-        if timer.tick(time.delta()).finished() {
-            commands.entity(parent).remove_children(children);
+                        parent.spawn_bundle(SpriteSheetBundle {
+                            transform: Transform::from_translation(Vec3::new(0., 1.25, 151.)),
+                            sprite: TextureAtlasSprite {
+                                index: 8 * 25,
+                                custom_size: Some(Vec2::new(0.5, 0.5)),
+                                ..Default::default()
+                            },
+                            texture_atlas: animated_assets.magic_elementals.clone(),
+                            ..Default::default()
+                        });
+                    }
+                });
 
-            for child in children.iter().copied() {
-                let (mut rigid_body, mut transform, global_transform) =
-                    query_enemy.get_mut(child).unwrap();
-                *transform.translation = *global_transform.translation;
-                *rigid_body = RigidBody::Dynamic;
-                commands.entity(child).insert(FollowNearestPlayer).remove::<InFleet>();
-            }
-
-            commands.entity(parent).despawn_recursive();
+            i = (i + 1) % 9 + 1;
         }
     }
 }
