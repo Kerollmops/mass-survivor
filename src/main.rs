@@ -97,10 +97,11 @@ fn spawn_player(
     game_assets: Res<GameAssets>,
 ) {
     let texture_atlas = game_assets.castle.clone();
+    let character = Castle::SimpleMonk;
     let animations_set = AnimationsSet {
-        idle: animations.add(Castle::SimpleMonk.idle_animation()),
-        walk: animations.add(Castle::SimpleMonk.walk_animation()),
-        attack: animations.add(Castle::SimpleMonk.attack_animation()),
+        idle: animations.add(character.idle_animation()),
+        walk: animations.add(character.walk_animation()),
+        attack: animations.add(character.attack_animation()),
     };
 
     commands
@@ -110,7 +111,7 @@ fn spawn_player(
         .insert(Velocity::default())
         .insert(RigidBody::Dynamic)
         .insert(CollisionShape::Cuboid {
-            half_extends: Vec3::new(0.4, 0.25, 0.),
+            half_extends: Vec3::new(0.30, 0.25, 0.),
             border_radius: None,
         })
         .insert(RotationConstraints::lock())
@@ -125,7 +126,6 @@ fn spawn_player(
                 .spawn_bundle(SpriteSheetBundle {
                     transform: Transform::from_translation(Vec3::new(0., 0.25, 0.)),
                     sprite: TextureAtlasSprite {
-                        // color: Color::YELLOW,
                         custom_size: Some(Vec2::new(1., 1.)),
                         ..Default::default()
                     },
@@ -189,7 +189,7 @@ fn spawn_ennemies(
                 .insert(RigidBody::Dynamic)
                 .insert(Damping::from_linear(1.))
                 .insert(CollisionShape::Cuboid {
-                    half_extends: Vec3::new(0.4, 0.25, 0.),
+                    half_extends: Vec3::new(0.32, 0.25, 0.),
                     border_radius: None,
                 })
                 .insert(RotationConstraints::lock())
@@ -300,26 +300,28 @@ fn move_player(keys: Res<Input<KeyCode>>, mut player_query: Query<&mut Velocity,
 
 fn change_player_color(
     mut events: EventReader<CollisionEvent>,
-    mut player_query: Query<(Entity, &mut Sprite), With<Player>>,
+    mut parent_query: Query<(&Children, Entity), With<Player>>,
+    mut child_query: Query<&mut TextureAtlasSprite>,
 ) {
-    let (entity, mut player_sprite) = match player_query.iter_mut().next() {
-        Some(value) => value,
-        None => return,
-    };
+    let (children, entity) = parent_query.single();
 
-    for event in events.iter() {
-        if let CollisionEvent::Started(data1, data2) = event {
-            let a = data1.collision_shape_entity();
-            let b = data2.collision_shape_entity();
+    for &child in children.iter() {
+        if let Ok(mut sprite) = child_query.get_mut(child) {
+            for event in events.iter() {
+                if let CollisionEvent::Started(data1, data2) = event {
+                    let a = data1.collision_shape_entity();
+                    let b = data2.collision_shape_entity();
 
-            if a == entity || b == entity {
-                player_sprite.color = HIT_PLAYER_COLOR;
-                return;
+                    if a == entity || b == entity {
+                        sprite.color = HIT_PLAYER_COLOR;
+                        return;
+                    }
+                }
             }
+
+            sprite.color = Color::default();
         }
     }
-
-    player_sprite.color = HEALTHY_PLAYER_COLOR;
 }
 
 fn player_loot_gems(
