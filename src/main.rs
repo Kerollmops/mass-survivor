@@ -1,6 +1,3 @@
-use std::f32::consts::PI;
-use std::time::Duration;
-
 use benimator::*;
 use bevy::prelude::*;
 use bevy_asset_loader::AssetLoader;
@@ -15,7 +12,8 @@ mod assets;
 
 const MAP_SIZE: u32 = 41;
 const GRID_WIDTH: f32 = 0.05;
-const PLAYER_SPEED: f32 = 10.0;
+const PLAYER_SPEED: f32 = 3.0;
+const UNITS_Z_INDEX: f32 = 90.0;
 
 const HEALTHY_PLAYER_COLOR: Color = Color::rgb(0., 0.47, 1.);
 const HIT_PLAYER_COLOR: Color = Color::rgb(0.9, 0.027, 0.);
@@ -24,7 +22,7 @@ fn main() {
     let mut app = App::new();
     AssetLoader::new(MyStates::AssetLoading)
         .continue_to_state(MyStates::Next)
-        .with_collection::<AnimatedAssets>()
+        .with_collection::<GameAssets>()
         .build(&mut app);
 
     app.add_state(MyStates::AssetLoading)
@@ -35,9 +33,12 @@ fn main() {
         .add_plugin(PhysicsPlugin::default())
         .insert_resource(Gravity::from(Vec3::ZERO))
         .add_startup_system(setup)
-        .add_startup_system(spawn_player)
         .add_system_to_stage(CoreStage::PostUpdate, camera_follow)
-        .add_system_set(SystemSet::on_enter(MyStates::Next).with_system(spawn_ennemies))
+        .add_system_set(
+            SystemSet::on_enter(MyStates::Next)
+                .with_system(spawn_player)
+                .with_system(spawn_ennemies),
+        )
         .add_system_set(
             SystemSet::on_update(MyStates::Next)
                 .with_system(follow_nearest_player)
@@ -45,6 +46,8 @@ fn main() {
                 .with_system(change_player_color)
                 .with_system(player_loot_gems),
         )
+        .add_system_to_stage(CoreStage::PostUpdate, change_animation_from_velocity)
+        .add_system_to_stage(CoreStage::PostUpdate, reorder_sprite_units)
         .run();
 }
 
@@ -88,34 +91,59 @@ fn setup(mut commands: Commands) {
     }
 }
 
-fn spawn_player(mut commands: Commands) {
+fn spawn_player(
+    mut commands: Commands,
+    mut animations: ResMut<Assets<SpriteSheetAnimation>>,
+    game_assets: Res<GameAssets>,
+) {
+    let texture_atlas = game_assets.castle.clone();
+    let animations_set = AnimationsSet {
+        idle: animations.add(Castle::SimpleMonk.idle_animation()),
+        walk: animations.add(Castle::SimpleMonk.walk_animation()),
+        attack: animations.add(Castle::SimpleMonk.attack_animation()),
+    };
+
     commands
-        .spawn_bundle(SpriteBundle {
-            transform: Transform::from_translation(Vec3::new(0., 0., 100.)),
-            sprite: Sprite {
-                color: HEALTHY_PLAYER_COLOR,
-                custom_size: Some(Vec2::new(1., 1.)),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
+        .spawn()
+        .insert(Transform::from_translation(Vec3::new(0., 0., UNITS_Z_INDEX)))
+        .insert(GlobalTransform::default())
         .insert(Velocity::default())
         .insert(RigidBody::Dynamic)
-        .insert(CollisionShape::Cuboid { half_extends: Vec3::splat(0.5), border_radius: None })
+        .insert(CollisionShape::Cuboid {
+            half_extends: Vec3::new(0.4, 0.25, 0.),
+            border_radius: None,
+        })
         .insert(RotationConstraints::lock())
         .insert(CollisionLayers::none().with_group(GameLayer::Player).with_masks(&[
             GameLayer::Gem,
             GameLayer::Stuff,
             GameLayer::Enemy,
         ]))
-        .insert(Player::default());
+        .insert(Player)
+        .with_children(|parent| {
+            parent
+                .spawn_bundle(SpriteSheetBundle {
+                    transform: Transform::from_translation(Vec3::new(0., 0.25, 0.)),
+                    sprite: TextureAtlasSprite {
+                        // color: Color::YELLOW,
+                        custom_size: Some(Vec2::new(1., 1.)),
+                        ..Default::default()
+                    },
+                    texture_atlas,
+                    ..Default::default()
+                })
+                // animation settings
+                .insert(animations_set.idle.clone())
+                .insert(animations_set)
+                .insert(Play);
+        });
 }
 
 fn spawn_ennemies(
     mut commands: Commands,
-    player_query: Query<&GlobalTransform, With<Player>>,
+    _player_query: Query<&GlobalTransform, With<Player>>,
     mut animations: ResMut<Assets<SpriteSheetAnimation>>,
-    animated_assets: Res<AnimatedAssets>,
+    game_assets: Res<GameAssets>,
 ) {
     let mut rng = rand::thread_rng();
 
@@ -125,69 +153,101 @@ fn spawn_ennemies(
                 continue;
             }
 
-            let elemental = Elemental::from_rng(&mut rng);
-            let animation = match rng.gen_range(0..6) {
-                0 => elemental.idle_animation(),
-                1 => elemental.walk_animation(),
-                2 => elemental.attack_animation(),
-                3 => elemental.hit_animation(),
-                4 => elemental.death_animation(),
-                _ => elemental.special_animation(),
+            let (texture_atlas, animations_set) = if rng.gen() {
+                let elemental = Elemental::from_rng(&mut rng);
+                let animation = AnimationsSet {
+                    idle: animations.add(elemental.idle_animation()),
+                    walk: animations.add(elemental.walk_animation()),
+                    attack: animations.add(elemental.attack_animation()),
+                };
+                (game_assets.magic_elementals.clone(), animation)
+            } else if rng.gen() {
+                let inferno = Inferno::from_rng(&mut rng);
+                let animation = AnimationsSet {
+                    idle: animations.add(inferno.idle_animation()),
+                    walk: animations.add(inferno.walk_animation()),
+                    attack: animations.add(inferno.attack_animation()),
+                };
+                (game_assets.infernos.clone(), animation)
+            } else {
+                let necromancer = Necromancer::from_rng(&mut rng);
+                let animation = AnimationsSet {
+                    idle: animations.add(necromancer.idle_animation()),
+                    walk: animations.add(necromancer.walk_animation()),
+                    attack: animations.add(necromancer.attack_animation()),
+                };
+                (game_assets.necromancers.clone(), animation)
             };
-            let animation_handle = animations.add(animation);
 
             commands
-                .spawn_bundle(SpriteSheetBundle {
-                    transform: Transform::from_translation(Vec3::new(x as f32, y as f32, 90.)),
-                    sprite: TextureAtlasSprite {
-                        custom_size: Some(Vec2::new(1., 1.)),
-                        ..Default::default()
-                    },
-                    texture_atlas: animated_assets.magic_elementals.clone(),
-                    ..Default::default()
-                })
-                // animation settings
-                .insert(animation_handle)
-                .insert(Play)
+                .spawn()
+                .insert(Transform::from_translation(Vec3::new(x as f32, y as f32, UNITS_Z_INDEX)))
+                .insert(GlobalTransform::default())
                 .insert(Velocity::default())
                 .insert(Acceleration::default())
                 .insert(MaxSpeed(0.2))
                 .insert(RigidBody::Dynamic)
                 .insert(Damping::from_linear(1.))
-                .insert(CollisionShape::Sphere { radius: 0.5 })
+                .insert(CollisionShape::Cuboid {
+                    half_extends: Vec3::new(0.4, 0.25, 0.),
+                    border_radius: None,
+                })
                 .insert(RotationConstraints::lock())
                 .insert(
                     CollisionLayers::none()
                         .with_group(GameLayer::Enemy)
                         .with_masks(&[GameLayer::Player, GameLayer::Enemy]),
                 )
-                .insert(InFleet)
                 .insert(Enemy)
                 .with_children(|parent| {
-                    if x == 1 && y == 1 {
-                        parent.spawn_bundle(SpriteBundle {
-                            transform: Transform::from_translation(Vec3::new(0., 1.2, 150.))
-                                .with_rotation(Quat::from_rotation_z(PI / 4.)),
-                            sprite: Sprite {
-                                color: Color::WHITE,
-                                custom_size: Some(Vec2::new(0.8, 0.8)),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        });
-
-                        parent.spawn_bundle(SpriteSheetBundle {
-                            transform: Transform::from_translation(Vec3::new(0., 1.25, 151.)),
+                    parent
+                        .spawn_bundle(SpriteSheetBundle {
+                            transform: Transform::from_translation(Vec3::new(0., 0.25, 0.)),
                             sprite: TextureAtlasSprite {
-                                index: elemental.head_sprite_index(),
-                                custom_size: Some(Vec2::new(0.5, 0.5)),
+                                custom_size: Some(Vec2::new(1., 1.)),
                                 ..Default::default()
                             },
-                            texture_atlas: animated_assets.magic_elementals.clone(),
+                            texture_atlas,
                             ..Default::default()
-                        });
-                    }
+                        })
+                        // animation settings
+                        .insert(animations_set.idle.clone())
+                        .insert(animations_set)
+                        .insert(Play);
                 });
+        }
+    }
+}
+
+fn reorder_sprite_units(mut shape_query: Query<&mut Transform, With<CollisionShape>>) {
+    for mut transform in shape_query.iter_mut() {
+        transform.translation[2] = UNITS_Z_INDEX - transform.translation[1] * 0.1;
+    }
+}
+
+fn change_animation_from_velocity(
+    parent_query: Query<(&Velocity, &Children)>,
+    mut child_query: Query<(
+        &mut TextureAtlasSprite,
+        &mut Handle<SpriteSheetAnimation>,
+        &AnimationsSet,
+    )>,
+) {
+    for (velocity, children) in parent_query.iter() {
+        for &child in children.iter() {
+            if let Ok((mut sprite, mut animation, animations_set)) = child_query.get_mut(child) {
+                if velocity.linear[0] > 0. {
+                    sprite.flip_x = false;
+                } else if velocity.linear[0] < 0. {
+                    sprite.flip_x = true;
+                }
+
+                if velocity.linear.length() < 0.1 {
+                    *animation = animations_set.idle.clone();
+                } else {
+                    *animation = animations_set.walk.clone();
+                }
+            }
         }
     }
 }
@@ -264,10 +324,10 @@ fn change_player_color(
 
 fn player_loot_gems(
     mut commands: Commands,
-    mut player_query: Query<&mut Player>,
+    _player_query: Query<&mut Player>,
     mut events: EventReader<CollisionEvent>,
 ) {
-    let mut player = player_query.single_mut();
+    // let mut player = player_query.single_mut();
 
     events
         .iter()
@@ -284,7 +344,7 @@ fn player_loot_gems(
             }
         })
         .for_each(|gem_entity| {
-            player.xp += 1;
+            // player.xp += 1;
             commands.entity(gem_entity).despawn();
         });
 }
@@ -318,6 +378,13 @@ enum MyStates {
 }
 
 #[derive(Component)]
+pub struct AnimationsSet {
+    idle: Handle<SpriteSheetAnimation>,
+    walk: Handle<SpriteSheetAnimation>,
+    attack: Handle<SpriteSheetAnimation>,
+}
+
+#[derive(Component)]
 pub struct Enemy;
 
 #[derive(Component)]
@@ -335,23 +402,8 @@ impl Health {
 #[derive(Component)]
 pub struct MaxSpeed(f32);
 
-#[derive(Component)]
-pub struct InFleet;
-
 #[derive(Default, Component)]
-pub struct Fleet;
-
-#[derive(Default, Bundle)]
-pub struct FleetBundle {
-    transform: Transform,
-    global_transform: GlobalTransform,
-    _fleet: Fleet,
-}
-
-#[derive(Default, Component)]
-pub struct Player {
-    xp: usize,
-}
+pub struct Player;
 
 #[derive(Component)]
 pub struct Gem;
