@@ -19,6 +19,7 @@ const GRID_WIDTH: f32 = 0.05;
 const PLAYER_SPEED: f32 = 3.0;
 const UNITS_Z_INDEX: f32 = 90.0;
 const CONVERTING_WEAPON_DISTANCE: f32 = 3.5;
+const PINK_CONVERTING_WEAPON: Color = Color::rgba(1., 0.584, 0.753, 1.);
 
 const HIT_PLAYER_COLOR: Color = Color::rgb(0.9, 0.027, 0.);
 
@@ -49,7 +50,8 @@ fn main() {
                 .with_system(move_player)
                 .with_system(change_player_color)
                 .with_system(player_loot_gems)
-                .with_system(move_converting_weapong_from_velocity),
+                .with_system(move_converting_weapong_from_velocity)
+                .with_system(convert_enemies),
         )
         .add_system_to_stage(CoreStage::PostUpdate, change_animation_from_velocity)
         .add_system_to_stage(CoreStage::PostUpdate, reorder_sprite_units)
@@ -172,10 +174,8 @@ fn spawn_player(
                         subdivisions_sides: 100,
                     });
 
-                    let color = ColorMaterial {
-                        color: Color::rgba(1., 0.584, 0.753, 0.9),
-                        ..Default::default()
-                    };
+                    let color =
+                        ColorMaterial { color: PINK_CONVERTING_WEAPON, ..Default::default() };
 
                     parent.spawn_bundle(MaterialMesh2dBundle {
                         mesh: Mesh2dHandle(meshes.add(torus)),
@@ -241,11 +241,11 @@ fn spawn_ennemies(
                     border_radius: None,
                 })
                 .insert(RotationConstraints::lock())
-                .insert(
-                    CollisionLayers::none()
-                        .with_group(GameLayer::Enemy)
-                        .with_masks(&[GameLayer::Player, GameLayer::Enemy]),
-                )
+                .insert(CollisionLayers::none().with_group(GameLayer::Enemy).with_masks(&[
+                    GameLayer::Player,
+                    GameLayer::Enemy,
+                    GameLayer::ConvertingWeapon,
+                ]))
                 .insert(Enemy)
                 .with_children(|parent| {
                     parent
@@ -426,12 +426,52 @@ fn player_loot_gems(
         });
 }
 
+fn convert_enemies(
+    mut commands: Commands,
+    mut events: EventReader<CollisionEvent>,
+    enemies_query: Query<&Children, With<Enemy>>,
+    mut sprite_query: Query<&mut TextureAtlasSprite>,
+) {
+    events
+        .iter()
+        .filter(|e| e.is_started())
+        .filter_map(|event| {
+            let (entity_1, entity_2) = event.rigid_body_entities();
+            let (layers_1, layers_2) = event.collision_layers();
+            if is_converting_weapon_layer(layers_1) && is_enemy_layer(layers_2) {
+                Some(entity_2)
+            } else if is_converting_weapon_layer(layers_2) && is_enemy_layer(layers_1) {
+                Some(entity_1)
+            } else {
+                None
+            }
+        })
+        .for_each(|enemy_entity| {
+            if let Ok(children) = enemies_query.get(enemy_entity) {
+                for child in children.iter() {
+                    if let Ok(mut sprite) = sprite_query.get_mut(*child) {
+                        sprite.color = PINK_CONVERTING_WEAPON;
+                    }
+                }
+                commands.entity(enemy_entity).remove::<Enemy>().insert(Ally);
+            }
+        });
+}
+
 fn is_player_layer(layers: CollisionLayers) -> bool {
     layers.contains_group(GameLayer::Player)
 }
 
 fn is_gem_layer(layers: CollisionLayers) -> bool {
     layers.contains_group(GameLayer::Gem)
+}
+
+fn is_enemy_layer(layers: CollisionLayers) -> bool {
+    layers.contains_group(GameLayer::Enemy)
+}
+
+fn is_converting_weapon_layer(layers: CollisionLayers) -> bool {
+    layers.contains_group(GameLayer::ConvertingWeapon)
 }
 
 fn camera_follow(
@@ -463,6 +503,9 @@ pub struct AnimationsSet {
 
 #[derive(Component)]
 pub struct Enemy;
+
+#[derive(Component)]
+pub struct Ally;
 
 #[derive(Component)]
 pub struct Health {
