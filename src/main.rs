@@ -1,4 +1,5 @@
 use std::f32::consts::PI;
+use std::time::Duration;
 
 use benimator::*;
 use bevy::prelude::shape::*;
@@ -32,6 +33,7 @@ fn main() {
 
     app.add_state(MyStates::AssetLoading)
         .insert_resource(ClearColor(Color::rgb(0.53, 0.53, 0.53)))
+        .insert_resource(ConvertingWeaponTimer(Timer::new(Duration::from_secs(2), false)))
         .add_plugins(DefaultPlugins)
         .add_plugin(AnimationPlugin::default())
         .add_plugin(TweeningPlugin)
@@ -50,9 +52,11 @@ fn main() {
                 .with_system(move_player)
                 .with_system(change_player_color)
                 .with_system(player_loot_gems)
-                .with_system(move_converting_weapong_from_velocity)
-                .with_system(convert_enemies),
+                .with_system(move_converting_weapon_from_velocity)
+                .with_system(mark_enemies_under_converting_weapon)
+                .with_system(convert_enemies_under_converting_weapon),
         )
+        .add_system_to_stage(CoreStage::PostUpdate, delete_converting_weapon_animation)
         .add_system_to_stage(CoreStage::PostUpdate, change_animation_from_velocity)
         .add_system_to_stage(CoreStage::PostUpdate, reorder_sprite_units)
         .run();
@@ -105,7 +109,6 @@ fn spawn_player(
     mut color_materials: ResMut<Assets<ColorMaterial>>,
     game_assets: Res<GameAssets>,
 ) {
-    let texture_atlas = game_assets.castle.clone();
     let character = Castle::SimpleMonk;
     let animations_set = AnimationsSet {
         idle: animations.add(character.idle_animation()),
@@ -139,7 +142,7 @@ fn spawn_player(
                         custom_size: Some(Vec2::new(1., 1.)),
                         ..Default::default()
                     },
-                    texture_atlas,
+                    texture_atlas: game_assets.castle.clone(),
                     ..Default::default()
                 })
                 // animation settings
@@ -174,8 +177,10 @@ fn spawn_player(
                         subdivisions_sides: 100,
                     });
 
-                    let color =
-                        ColorMaterial { color: PINK_CONVERTING_WEAPON, ..Default::default() };
+                    let color = ColorMaterial {
+                        color: PINK_CONVERTING_WEAPON * [1., 1., 1., 0.2],
+                        ..Default::default()
+                    };
 
                     parent.spawn_bundle(MaterialMesh2dBundle {
                         mesh: Mesh2dHandle(meshes.add(torus)),
@@ -247,6 +252,7 @@ fn spawn_ennemies(
                     GameLayer::ConvertingWeapon,
                 ]))
                 .insert(Enemy)
+                .insert(UnderConvertingWeapon(false))
                 .with_children(|parent| {
                     parent
                         .spawn_bundle(SpriteSheetBundle {
@@ -300,7 +306,7 @@ fn change_animation_from_velocity(
     }
 }
 
-fn move_converting_weapong_from_velocity(
+fn move_converting_weapon_from_velocity(
     parent_query: Query<(&Velocity, &Children)>,
     mut child_query: Query<&mut Transform, With<ConvertingWeapon>>,
 ) {
@@ -426,36 +432,84 @@ fn player_loot_gems(
         });
 }
 
-fn convert_enemies(
-    mut commands: Commands,
+fn mark_enemies_under_converting_weapon(
     mut events: EventReader<CollisionEvent>,
-    enemies_query: Query<&Children, With<Enemy>>,
-    mut sprite_query: Query<&mut TextureAtlasSprite>,
+    mut enemies_query: Query<&mut UnderConvertingWeapon, With<Enemy>>,
 ) {
     events
         .iter()
-        .filter(|e| e.is_started())
         .filter_map(|event| {
             let (entity_1, entity_2) = event.rigid_body_entities();
             let (layers_1, layers_2) = event.collision_layers();
             if is_converting_weapon_layer(layers_1) && is_enemy_layer(layers_2) {
-                Some(entity_2)
+                Some((event, entity_2))
             } else if is_converting_weapon_layer(layers_2) && is_enemy_layer(layers_1) {
-                Some(entity_1)
+                Some((event, entity_1))
             } else {
                 None
             }
         })
-        .for_each(|enemy_entity| {
-            if let Ok(children) = enemies_query.get(enemy_entity) {
-                for child in children.iter() {
-                    if let Ok(mut sprite) = sprite_query.get_mut(*child) {
-                        sprite.color = PINK_CONVERTING_WEAPON;
-                    }
-                }
-                commands.entity(enemy_entity).remove::<Enemy>().insert(Ally);
+        .for_each(|(event, enemy_entity)| {
+            if let Ok(mut under_converting_weapon) = enemies_query.get_mut(enemy_entity) {
+                under_converting_weapon.0 = event.is_started();
             }
         });
+}
+
+fn convert_enemies_under_converting_weapon(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut converting_weapon_timer: ResMut<ConvertingWeaponTimer>,
+    converting_weapon_query: Query<&GlobalTransform, With<ConvertingWeapon>>,
+    mut enemies_query: Query<(&mut UnderConvertingWeapon, &Children), With<Enemy>>,
+    mut texture_query: Query<&mut TextureAtlasSprite>,
+    mut animations: ResMut<Assets<SpriteSheetAnimation>>,
+    game_assets: Res<GameAssets>,
+) {
+    if converting_weapon_timer.0.tick(time.delta()).finished() {
+        converting_weapon_timer.0.reset();
+
+        // Spawn the one-time animation
+        let global_transform = converting_weapon_query.single();
+        let animation =
+            SpriteSheetAnimation::from_range(0..=19, Duration::from_secs_f64(1.0 / 18.0)).once();
+        commands
+            .spawn_bundle(SpriteSheetBundle {
+                transform: Transform::from_translation(global_transform.translation),
+                sprite: TextureAtlasSprite {
+                    color: PINK_CONVERTING_WEAPON,
+                    custom_size: Some(Vec2::new(5., 5.)),
+                    ..Default::default()
+                },
+                texture_atlas: game_assets.smoke_effect_07.clone(),
+                ..Default::default()
+            })
+            .insert(animations.add(animation))
+            .insert(Play)
+            .insert(ConvertingWeaponAnimation);
+
+        for (under_converting_weapon, children) in enemies_query.iter_mut() {
+            if under_converting_weapon.0 {
+                for child in children.iter() {
+                    if let Ok(mut texture_query) = texture_query.get_mut(*child) {
+                        texture_query.color = PINK_CONVERTING_WEAPON;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn delete_converting_weapon_animation(
+    mut commands: Commands,
+    removals: RemovedComponents<Play>,
+    animation_query: Query<&ConvertingWeaponAnimation>,
+) {
+    for entity in removals.iter() {
+        if let Ok(_) = animation_query.get(entity) {
+            commands.entity(entity).despawn();
+        }
+    }
 }
 
 fn is_player_layer(layers: CollisionLayers) -> bool {
@@ -543,3 +597,12 @@ pub enum GameLayer {
 
 #[derive(Component)]
 pub struct ConvertingWeapon;
+
+#[derive(Component)]
+pub struct ConvertingWeaponTimer(Timer);
+
+#[derive(Component)]
+pub struct ConvertingWeaponAnimation;
+
+#[derive(Component)]
+pub struct UnderConvertingWeapon(bool);
