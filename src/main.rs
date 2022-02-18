@@ -1,5 +1,9 @@
+use std::f32::consts::PI;
+
 use benimator::*;
+use bevy::prelude::shape::*;
 use bevy::prelude::*;
+use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
 use bevy_asset_loader::AssetLoader;
 use bevy_tweening::*;
 use heron::prelude::*;
@@ -14,8 +18,8 @@ const MAP_SIZE: u32 = 41;
 const GRID_WIDTH: f32 = 0.05;
 const PLAYER_SPEED: f32 = 3.0;
 const UNITS_Z_INDEX: f32 = 90.0;
+const CONVERTING_WEAPON_DISTANCE: f32 = 3.5;
 
-const HEALTHY_PLAYER_COLOR: Color = Color::rgb(0., 0.47, 1.);
 const HIT_PLAYER_COLOR: Color = Color::rgb(0.9, 0.027, 0.);
 
 fn main() {
@@ -44,7 +48,8 @@ fn main() {
                 .with_system(follow_nearest_player)
                 .with_system(move_player)
                 .with_system(change_player_color)
-                .with_system(player_loot_gems),
+                .with_system(player_loot_gems)
+                .with_system(move_converting_weapong_from_velocity),
         )
         .add_system_to_stage(CoreStage::PostUpdate, change_animation_from_velocity)
         .add_system_to_stage(CoreStage::PostUpdate, reorder_sprite_units)
@@ -94,6 +99,8 @@ fn setup(mut commands: Commands) {
 fn spawn_player(
     mut commands: Commands,
     mut animations: ResMut<Assets<SpriteSheetAnimation>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut color_materials: ResMut<Assets<ColorMaterial>>,
     game_assets: Res<GameAssets>,
 ) {
     let texture_atlas = game_assets.castle.clone();
@@ -122,6 +129,7 @@ fn spawn_player(
         ]))
         .insert(Player)
         .with_children(|parent| {
+            // spawn the sprite
             parent
                 .spawn_bundle(SpriteSheetBundle {
                     transform: Transform::from_translation(Vec3::new(0., 0.25, 0.)),
@@ -136,6 +144,46 @@ fn spawn_player(
                 .insert(animations_set.idle.clone())
                 .insert(animations_set)
                 .insert(Play);
+
+            // spawn the converting weapon
+            parent
+                .spawn()
+                .insert(Transform::from_translation(Vec3::new(
+                    CONVERTING_WEAPON_DISTANCE,
+                    0.,
+                    UNITS_Z_INDEX,
+                )))
+                .insert(GlobalTransform::default())
+                .insert(RigidBody::Sensor)
+                .insert(CollisionShape::Sphere { radius: 1.8 })
+                .insert(RotationConstraints::lock())
+                .insert(
+                    CollisionLayers::none()
+                        .with_group(GameLayer::ConvertingWeapon)
+                        .with_mask(GameLayer::Enemy),
+                )
+                .insert(ConvertingWeapon)
+                .with_children(|parent| {
+                    // spawn the visual pink circle
+                    let torus = Mesh::from(Torus {
+                        radius: 1.8,
+                        ring_radius: 0.02,
+                        subdivisions_segments: 100,
+                        subdivisions_sides: 100,
+                    });
+
+                    let color = ColorMaterial {
+                        color: Color::rgba(1., 0.584, 0.753, 0.9),
+                        ..Default::default()
+                    };
+
+                    parent.spawn_bundle(MaterialMesh2dBundle {
+                        mesh: Mesh2dHandle(meshes.add(torus)),
+                        material: color_materials.add(color),
+                        transform: Transform::from_rotation(Quat::from_rotation_x(PI / 2.)),
+                        ..Default::default()
+                    });
+                });
         });
 }
 
@@ -252,6 +300,33 @@ fn change_animation_from_velocity(
     }
 }
 
+fn move_converting_weapong_from_velocity(
+    parent_query: Query<(&Velocity, &Children)>,
+    mut child_query: Query<&mut Transform, With<ConvertingWeapon>>,
+) {
+    for (velocity, children) in parent_query.iter() {
+        for &child in children.iter() {
+            if let Ok(mut transform) = child_query.get_mut(child) {
+                if velocity.linear[0] > 0. {
+                    transform.translation[0] = CONVERTING_WEAPON_DISTANCE;
+                } else if velocity.linear[0] < 0. {
+                    transform.translation[0] = -CONVERTING_WEAPON_DISTANCE;
+                } else if velocity.linear[1] != 0. {
+                    transform.translation[0] = 0.;
+                }
+
+                if velocity.linear[1] > 0. {
+                    transform.translation[1] = CONVERTING_WEAPON_DISTANCE;
+                } else if velocity.linear[1] < 0. {
+                    transform.translation[1] = -CONVERTING_WEAPON_DISTANCE;
+                } else if velocity.linear[0] != 0. {
+                    transform.translation[1] = 0.;
+                }
+            }
+        }
+    }
+}
+
 // Find the nearest player by using the squared distance (faster to compute)
 fn follow_nearest_player(
     player_query: Query<&GlobalTransform, With<Player>>,
@@ -300,7 +375,7 @@ fn move_player(keys: Res<Input<KeyCode>>, mut player_query: Query<&mut Velocity,
 
 fn change_player_color(
     mut events: EventReader<CollisionEvent>,
-    mut parent_query: Query<(&Children, Entity), With<Player>>,
+    parent_query: Query<(&Children, Entity), With<Player>>,
     mut child_query: Query<&mut TextureAtlasSprite>,
 ) {
     let (children, entity) = parent_query.single();
@@ -417,7 +492,11 @@ pub struct FollowNearestPlayer;
 pub enum GameLayer {
     Player,
     Weapon,
+    ConvertingWeapon,
     Enemy,
     Gem,
     Stuff,
 }
+
+#[derive(Component)]
+pub struct ConvertingWeapon;
