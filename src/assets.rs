@@ -41,7 +41,7 @@ pub struct GameAssets {
     #[asset(path = "images/SmokeEffect07.png")]
     pub smoke_effect_07: Handle<TextureAtlas>,
 
-    #[asset(texture_atlas(tile_size_x = 16., tile_size_y = 16., columns = 8, rows = 1))]
+    #[asset(texture_atlas(tile_size_x = 16., tile_size_y = 16., columns = 8, rows = 4))]
     #[asset(path = "images/PinkSelector01.png")]
     pub pink_selector_01: Handle<TextureAtlas>,
 }
@@ -315,5 +315,21 @@ impl Castle {
     pub fn death_animation(&self) -> SpriteSheetAnimation {
         let index = *self as usize * 20 + 16;
         SpriteSheetAnimation::from_range(index..=index + 3, Duration::from_secs_f64(1.0 / 6.0))
+    }
+}
+
+#[derive(Copy, Clone)]
+#[repr(u32)]
+pub enum PinkSelector {
+    Full = 0,
+    TwoThird,
+    OneThird,
+    Empty,
+}
+
+impl PinkSelector {
+    pub fn animation(&self) -> SpriteSheetAnimation {
+        let index = *self as usize * 8;
+        SpriteSheetAnimation::from_range(index..=index + 7, Duration::from_secs_f64(1.0 / 12.0))
     }
 }

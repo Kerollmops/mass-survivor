@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use bevy_asset_loader::AssetLoader;
 use bevy_tweening::*;
 use heron::prelude::*;
-use ordered_float::NotNan;
+use ordered_float::OrderedFloat;
 use rand::Rng;
 
 use self::assets::*;
@@ -46,12 +46,14 @@ fn main() {
         .add_system_set(
             SystemSet::on_update(MyStates::Next)
                 .with_system(follow_nearest_player)
+                .with_system(follow_nearest_enemy)
                 .with_system(move_player)
                 .with_system(change_player_color)
                 .with_system(player_loot_gems)
                 .with_system(move_converting_weapon_from_velocity)
                 .with_system(mark_enemies_under_converting_weapon)
-                .with_system(convert_enemies_under_converting_weapon),
+                .with_system(convert_enemies_under_converting_weapon)
+                .with_system(change_love_animation),
         )
         .add_system_to_stage(CoreStage::PostUpdate, delete_converting_weapon_animation)
         .add_system_to_stage(CoreStage::PostUpdate, change_animation_from_velocity)
@@ -59,10 +61,18 @@ fn main() {
         .run();
 }
 
-fn setup(mut commands: Commands) {
+fn setup(mut commands: Commands, mut animations: ResMut<Assets<SpriteSheetAnimation>>) {
     let mut camera_bundle = OrthographicCameraBundle::new_2d();
     camera_bundle.orthographic_projection.scale = 1. / 50.;
     commands.spawn_bundle(camera_bundle);
+
+    // generate the pink selector animations
+    commands.insert_resource(PinkSelectorAnimationsSet {
+        full: animations.add(PinkSelector::Full.animation()),
+        two_third: animations.add(PinkSelector::TwoThird.animation()),
+        one_third: animations.add(PinkSelector::OneThird.animation()),
+        empty: animations.add(PinkSelector::Empty.animation()),
+    });
 
     // Horizontal lines
     for i in 0..=MAP_SIZE {
@@ -105,7 +115,7 @@ fn spawn_player(
     game_assets: Res<GameAssets>,
 ) {
     let character = Castle::SimpleMonk;
-    let animations_set = AnimationsSet {
+    let animations_set = CharactersAnimationsSet {
         idle: animations.add(character.idle_animation()),
         walk: animations.add(character.walk_animation()),
         attack: animations.add(character.attack_animation()),
@@ -174,15 +184,11 @@ fn spawn_ennemies(
 ) {
     let mut rng = rand::thread_rng();
 
-    for x in -5..=5 {
+    for x in -15..=-5 {
         for y in -5..=5 {
-            if x == 0 && y == 0 {
-                continue;
-            }
-
             let (texture_atlas, animations_set) = if rng.gen() {
                 let elemental = Elemental::from_rng(&mut rng);
-                let animation = AnimationsSet {
+                let animation = CharactersAnimationsSet {
                     idle: animations.add(elemental.idle_animation()),
                     walk: animations.add(elemental.walk_animation()),
                     attack: animations.add(elemental.attack_animation()),
@@ -190,7 +196,7 @@ fn spawn_ennemies(
                 (game_assets.magic_elementals.clone(), animation)
             } else if rng.gen() {
                 let inferno = Inferno::from_rng(&mut rng);
-                let animation = AnimationsSet {
+                let animation = CharactersAnimationsSet {
                     idle: animations.add(inferno.idle_animation()),
                     walk: animations.add(inferno.walk_animation()),
                     attack: animations.add(inferno.attack_animation()),
@@ -198,7 +204,7 @@ fn spawn_ennemies(
                 (game_assets.infernos.clone(), animation)
             } else {
                 let necromancer = Necromancer::from_rng(&mut rng);
-                let animation = AnimationsSet {
+                let animation = CharactersAnimationsSet {
                     idle: animations.add(necromancer.idle_animation()),
                     walk: animations.add(necromancer.walk_animation()),
                     attack: animations.add(necromancer.attack_animation()),
@@ -212,7 +218,6 @@ fn spawn_ennemies(
                 .insert(GlobalTransform::default())
                 .insert(Velocity::default())
                 .insert(Acceleration::default())
-                .insert(MaxSpeed(0.2))
                 .insert(RigidBody::Dynamic)
                 .insert(Damping::from_linear(1.))
                 .insert(CollisionShape::Cuboid {
@@ -226,6 +231,7 @@ fn spawn_ennemies(
                     GameLayer::ConvertingWeapon,
                 ]))
                 .insert(Enemy)
+                .insert(FollowNearest { max_speed: rng.gen_range(0.2..=1.2) })
                 .insert(UnderConvertingWeapon(false))
                 .with_children(|parent| {
                     parent
@@ -258,7 +264,7 @@ fn change_animation_from_velocity(
     mut child_query: Query<(
         &mut TextureAtlasSprite,
         &mut Handle<SpriteSheetAnimation>,
-        &AnimationsSet,
+        &CharactersAnimationsSet,
     )>,
 ) {
     for (velocity, children) in parent_query.iter() {
@@ -307,19 +313,45 @@ fn move_converting_weapon_from_velocity(
     }
 }
 
-// Find the nearest player by using the squared distance (faster to compute)
+/// Find the nearest player by using the squared distance (faster to compute).
 fn follow_nearest_player(
     player_query: Query<&GlobalTransform, With<Player>>,
     mut enemy_query: Query<
-        (&Transform, &mut Velocity, &mut Acceleration, &MaxSpeed),
-        With<FollowNearestPlayer>,
+        (&Transform, &mut Velocity, &mut Acceleration, &FollowNearest),
+        With<Enemy>,
     >,
 ) {
-    for (transform, mut velocity, mut acceleration, max_speed) in enemy_query.iter_mut() {
-        let MaxSpeed(max_speed) = *max_speed;
-        match player_query.iter().min_by_key(|pt| {
-            NotNan::new(pt.translation.distance_squared(transform.translation)).unwrap()
-        }) {
+    for (transform, mut velocity, mut acceleration, follow) in enemy_query.iter_mut() {
+        let max_speed = follow.max_speed;
+        match player_query
+            .iter()
+            .min_by_key(|pt| OrderedFloat(pt.translation.distance_squared(transform.translation)))
+        {
+            Some(pt) => {
+                let direction = (pt.translation - transform.translation).normalize_or_zero();
+                let limit = Vec3::splat(max_speed);
+                velocity.linear = velocity.linear.clamp(-limit, limit);
+                acceleration.linear = direction * 7.;
+            }
+            None => acceleration.linear = Vec3::ZERO,
+        }
+    }
+}
+
+/// Find the nearest enemy by using the squared distance (faster to compute).
+fn follow_nearest_enemy(
+    enemy_query: Query<&GlobalTransform, With<Enemy>>,
+    mut ally_query: Query<
+        (&Transform, &mut Velocity, &mut Acceleration, &FollowNearest),
+        With<Ally>,
+    >,
+) {
+    for (transform, mut velocity, mut acceleration, follow) in ally_query.iter_mut() {
+        let max_speed = follow.max_speed;
+        match enemy_query
+            .iter()
+            .min_by_key(|pt| OrderedFloat(pt.translation.distance_squared(transform.translation)))
+        {
             Some(pt) => {
                 let direction = (pt.translation - transform.translation).normalize_or_zero();
                 let limit = Vec3::splat(max_speed);
@@ -478,10 +510,7 @@ fn convert_enemies_under_converting_weapon(
                                 texture_atlas: game_assets.pink_selector_01.clone(),
                                 ..Default::default()
                             })
-                            .insert(animations.add(SpriteSheetAnimation::from_range(
-                                0..=7,
-                                Duration::from_secs_f64(1.0 / 12.0),
-                            )))
+                            .insert(animations.add(PinkSelector::Full.animation()))
                             .insert(Play);
                     })
                     .insert(Ally)
@@ -499,6 +528,23 @@ fn delete_converting_weapon_animation(
     for entity in removals.iter() {
         if let Ok(_) = animation_query.get(entity) {
             commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn change_love_animation(
+    pink_selector_animations: Res<PinkSelectorAnimationsSet>,
+    ally_query: Query<(&Children, &Health), (With<Ally>, Changed<Health>)>,
+    mut child_query: Query<&mut Handle<SpriteSheetAnimation>>,
+) {
+    for (children, health) in ally_query.iter() {
+        if let Ok(mut animation) = child_query.get_mut(children[0]) {
+            *animation = match health {
+                Health::Full => pink_selector_animations.full.clone(),
+                Health::OneThird => pink_selector_animations.one_third.clone(),
+                Health::TwoThird => pink_selector_animations.two_third.clone(),
+                Health::Empty => pink_selector_animations.empty.clone(),
+            };
         }
     }
 }
@@ -540,10 +586,18 @@ enum MyStates {
 }
 
 #[derive(Component)]
-pub struct AnimationsSet {
+pub struct CharactersAnimationsSet {
     idle: Handle<SpriteSheetAnimation>,
     walk: Handle<SpriteSheetAnimation>,
     attack: Handle<SpriteSheetAnimation>,
+}
+
+#[derive(Component)]
+pub struct PinkSelectorAnimationsSet {
+    full: Handle<SpriteSheetAnimation>,
+    two_third: Handle<SpriteSheetAnimation>,
+    one_third: Handle<SpriteSheetAnimation>,
+    empty: Handle<SpriteSheetAnimation>,
 }
 
 #[derive(Component)]
@@ -553,19 +607,12 @@ pub struct Enemy;
 pub struct Ally;
 
 #[derive(Component)]
-pub struct Health {
-    pub current: usize,
-    pub max: usize,
+pub enum Health {
+    Full,
+    TwoThird,
+    OneThird,
+    Empty,
 }
-
-impl Health {
-    pub fn new(max: usize) -> Health {
-        Health { current: max, max }
-    }
-}
-
-#[derive(Component)]
-pub struct MaxSpeed(f32);
 
 #[derive(Default, Component)]
 pub struct Player;
@@ -573,8 +620,16 @@ pub struct Player;
 #[derive(Component)]
 pub struct Gem;
 
-#[derive(Default, Component)]
-pub struct FollowNearestPlayer;
+#[derive(Component)]
+pub struct FollowNearest {
+    max_speed: f32,
+}
+
+impl Default for FollowNearest {
+    fn default() -> FollowNearest {
+        FollowNearest { max_speed: 0.5 }
+    }
+}
 
 #[derive(PhysicsLayer)]
 pub enum GameLayer {
