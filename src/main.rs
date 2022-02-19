@@ -1,10 +1,7 @@
-use std::f32::consts::PI;
 use std::time::Duration;
 
 use benimator::*;
-use bevy::prelude::shape::*;
 use bevy::prelude::*;
-use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
 use bevy_asset_loader::AssetLoader;
 use bevy_tweening::*;
 use heron::prelude::*;
@@ -105,8 +102,6 @@ fn setup(mut commands: Commands) {
 fn spawn_player(
     mut commands: Commands,
     mut animations: ResMut<Assets<SpriteSheetAnimation>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut color_materials: ResMut<Assets<ColorMaterial>>,
     game_assets: Res<GameAssets>,
 ) {
     let character = Castle::SimpleMonk;
@@ -167,28 +162,7 @@ fn spawn_player(
                         .with_group(GameLayer::ConvertingWeapon)
                         .with_mask(GameLayer::Enemy),
                 )
-                .insert(ConvertingWeapon)
-                .with_children(|parent| {
-                    // spawn the visual pink circle
-                    let torus = Mesh::from(Torus {
-                        radius: 1.8,
-                        ring_radius: 0.02,
-                        subdivisions_segments: 100,
-                        subdivisions_sides: 100,
-                    });
-
-                    let color = ColorMaterial {
-                        color: PINK_CONVERTING_WEAPON * [1., 1., 1., 0.2],
-                        ..Default::default()
-                    };
-
-                    parent.spawn_bundle(MaterialMesh2dBundle {
-                        mesh: Mesh2dHandle(meshes.add(torus)),
-                        material: color_materials.add(color),
-                        transform: Transform::from_rotation(Quat::from_rotation_x(PI / 2.)),
-                        ..Default::default()
-                    });
-                });
+                .insert(ConvertingWeapon);
         });
 }
 
