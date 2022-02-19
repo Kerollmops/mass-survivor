@@ -44,6 +44,10 @@ pub struct GameAssets {
     #[asset(texture_atlas(tile_size_x = 16., tile_size_y = 16., columns = 8, rows = 4))]
     #[asset(path = "images/PinkSelector01.png")]
     pub pink_selector_01: Handle<TextureAtlas>,
+
+    #[asset(texture_atlas(tile_size_x = 16., tile_size_y = 16., columns = 8, rows = 4))]
+    #[asset(path = "images/RedSelector01.png")]
+    pub red_selector_01: Handle<TextureAtlas>,
 }
 
 #[derive(Copy, Clone)]
@@ -197,33 +201,33 @@ pub enum Inferno {
     MaleDemon,
     MalePitField,
     MaleEfreet,
-    MaleDevil,
+    // MaleDevil,
     FemaleImp = 9,
     FemaleGog,
     FemaleHellHound,
     FemaleDemon,
     FemalePitField,
     FemaleEfreet,
-    FemaleDevil,
+    // FemaleDevil,
 }
 
 impl Inferno {
     pub fn from_rng<R: Rng>(rng: &mut R) -> Inferno {
-        match rng.gen_range(0..14) {
+        match rng.gen_range(0..12) {
             0 => Inferno::MaleImp,
             1 => Inferno::MaleGog,
             2 => Inferno::MaleHellHound,
             3 => Inferno::MaleDemon,
             4 => Inferno::MalePitField,
             5 => Inferno::MaleEfreet,
-            6 => Inferno::MaleDevil,
-            7 => Inferno::FemaleImp,
-            8 => Inferno::FemaleGog,
-            9 => Inferno::FemaleHellHound,
-            10 => Inferno::FemaleDemon,
-            11 => Inferno::FemalePitField,
-            12 => Inferno::FemaleEfreet,
-            _ => Inferno::FemaleDevil,
+            // 6 => Inferno::MaleDevil,
+            6 => Inferno::FemaleImp,
+            7 => Inferno::FemaleGog,
+            8 => Inferno::FemaleHellHound,
+            9 => Inferno::FemaleDemon,
+            10 => Inferno::FemalePitField,
+            _ => Inferno::FemaleEfreet,
+            // _ => Inferno::FemaleDevil,
         }
     }
 
@@ -328,6 +332,22 @@ pub enum PinkSelector {
 }
 
 impl PinkSelector {
+    pub fn animation(&self) -> SpriteSheetAnimation {
+        let index = *self as usize * 8;
+        SpriteSheetAnimation::from_range(index..=index + 7, Duration::from_secs_f64(1.0 / 12.0))
+    }
+}
+
+#[derive(Copy, Clone)]
+#[repr(u32)]
+pub enum RedSelector {
+    Full = 0,
+    TwoThird,
+    OneThird,
+    Empty,
+}
+
+impl RedSelector {
     pub fn animation(&self) -> SpriteSheetAnimation {
         let index = *self as usize * 8;
         SpriteSheetAnimation::from_range(index..=index + 7, Duration::from_secs_f64(1.0 / 12.0))

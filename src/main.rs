@@ -48,12 +48,14 @@ fn main() {
                 .with_system(follow_nearest_player)
                 .with_system(follow_nearest_enemy)
                 .with_system(move_player)
-                .with_system(change_player_color)
+                .with_system(change_player_health)
                 .with_system(player_loot_gems)
                 .with_system(move_converting_weapon_from_velocity)
                 .with_system(mark_enemies_under_converting_weapon)
                 .with_system(convert_enemies_under_converting_weapon)
-                .with_system(change_love_animation),
+                .with_system(change_love_animation)
+                .with_system(change_health_animation)
+                .with_system(animate_and_disable_dead_entities),
         )
         .add_system_to_stage(CoreStage::PostUpdate, delete_converting_weapon_animation)
         .add_system_to_stage(CoreStage::PostUpdate, change_animation_from_velocity)
@@ -72,6 +74,14 @@ fn setup(mut commands: Commands, mut animations: ResMut<Assets<SpriteSheetAnimat
         two_third: animations.add(PinkSelector::TwoThird.animation()),
         one_third: animations.add(PinkSelector::OneThird.animation()),
         empty: animations.add(PinkSelector::Empty.animation()),
+    });
+
+    // generate the red selector animations
+    commands.insert_resource(RedSelectorAnimationsSet {
+        full: animations.add(RedSelector::Full.animation()),
+        two_third: animations.add(RedSelector::TwoThird.animation()),
+        one_third: animations.add(RedSelector::OneThird.animation()),
+        empty: animations.add(RedSelector::Empty.animation()),
     });
 
     // Horizontal lines
@@ -113,12 +123,14 @@ fn spawn_player(
     mut commands: Commands,
     mut animations: ResMut<Assets<SpriteSheetAnimation>>,
     game_assets: Res<GameAssets>,
+    red_selector_animations_set: Res<RedSelectorAnimationsSet>,
 ) {
     let character = Castle::SimpleMonk;
     let animations_set = CharactersAnimationsSet {
         idle: animations.add(character.idle_animation()),
         walk: animations.add(character.walk_animation()),
         attack: animations.add(character.attack_animation()),
+        death: animations.add(character.death_animation().once()),
     };
 
     commands
@@ -137,6 +149,7 @@ fn spawn_player(
             GameLayer::Stuff,
             GameLayer::Enemy,
         ]))
+        .insert(Health::Full)
         .insert(Player)
         .with_children(|parent| {
             // spawn the sprite
@@ -154,6 +167,21 @@ fn spawn_player(
                 .insert(animations_set.idle.clone())
                 .insert(animations_set)
                 .insert(Play);
+
+            // spawn the pink selector on the player
+            parent
+                .spawn_bundle(SpriteSheetBundle {
+                    transform: Transform::from_translation(Vec3::new(0., 1.1, 0.)),
+                    sprite: TextureAtlasSprite {
+                        custom_size: Some(Vec2::new(0.7, 0.7)),
+                        ..Default::default()
+                    },
+                    texture_atlas: game_assets.red_selector_01.clone(),
+                    ..Default::default()
+                })
+                .insert(red_selector_animations_set.full.clone())
+                .insert(Play)
+                .insert(RedSelectorHealth);
 
             // spawn the converting weapon
             parent
@@ -192,6 +220,7 @@ fn spawn_ennemies(
                     idle: animations.add(elemental.idle_animation()),
                     walk: animations.add(elemental.walk_animation()),
                     attack: animations.add(elemental.attack_animation()),
+                    death: animations.add(elemental.death_animation().once()),
                 };
                 (game_assets.magic_elementals.clone(), animation)
             } else if rng.gen() {
@@ -200,6 +229,7 @@ fn spawn_ennemies(
                     idle: animations.add(inferno.idle_animation()),
                     walk: animations.add(inferno.walk_animation()),
                     attack: animations.add(inferno.attack_animation()),
+                    death: animations.add(inferno.death_animation().once()),
                 };
                 (game_assets.infernos.clone(), animation)
             } else {
@@ -208,6 +238,7 @@ fn spawn_ennemies(
                     idle: animations.add(necromancer.idle_animation()),
                     walk: animations.add(necromancer.walk_animation()),
                     attack: animations.add(necromancer.attack_animation()),
+                    death: animations.add(necromancer.death_animation().once()),
                 };
                 (game_assets.necromancers.clone(), animation)
             };
@@ -260,26 +291,30 @@ fn reorder_sprite_units(mut shape_query: Query<&mut Transform, With<CollisionSha
 }
 
 fn change_animation_from_velocity(
-    parent_query: Query<(&Velocity, &Children)>,
+    parent_query: Query<(&Velocity, &Health, &Children)>,
     mut child_query: Query<(
         &mut TextureAtlasSprite,
         &mut Handle<SpriteSheetAnimation>,
         &CharactersAnimationsSet,
     )>,
 ) {
-    for (velocity, children) in parent_query.iter() {
+    for (velocity, health, children) in parent_query.iter() {
         for &child in children.iter() {
             if let Ok((mut sprite, mut animation, animations_set)) = child_query.get_mut(child) {
-                if velocity.linear[0] > 0. {
-                    sprite.flip_x = false;
-                } else if velocity.linear[0] < 0. {
-                    sprite.flip_x = true;
-                }
-
-                if velocity.linear.length() < 0.1 {
-                    *animation = animations_set.idle.clone();
+                if let Health::Empty = health {
+                    *animation = animations_set.death.clone();
                 } else {
-                    *animation = animations_set.walk.clone();
+                    if velocity.linear[0] > 0. {
+                        sprite.flip_x = false;
+                    } else if velocity.linear[0] < 0. {
+                        sprite.flip_x = true;
+                    }
+
+                    if velocity.linear.length() < 0.1 {
+                        *animation = animations_set.idle.clone();
+                    } else {
+                        *animation = animations_set.walk.clone();
+                    }
                 }
             }
         }
@@ -363,50 +398,66 @@ fn follow_nearest_enemy(
     }
 }
 
-fn move_player(keys: Res<Input<KeyCode>>, mut player_query: Query<&mut Velocity, With<Player>>) {
-    for mut velocity in player_query.iter_mut() {
-        let y = if keys.any_pressed([KeyCode::Up, KeyCode::W]) {
-            1.
-        } else if keys.any_pressed([KeyCode::Down, KeyCode::S]) {
-            -1.
-        } else {
-            0.
-        };
+fn move_player(
+    keys: Res<Input<KeyCode>>,
+    mut player_query: Query<(&mut Velocity, &Health), With<Player>>,
+) {
+    for (mut velocity, health) in player_query.iter_mut() {
+        if *health != Health::Empty {
+            let y = if keys.any_pressed([KeyCode::Up, KeyCode::W]) {
+                1.
+            } else if keys.any_pressed([KeyCode::Down, KeyCode::S]) {
+                -1.
+            } else {
+                0.
+            };
 
-        let x = if keys.any_pressed([KeyCode::Right, KeyCode::D]) {
-            1.
-        } else if keys.any_pressed([KeyCode::Left, KeyCode::A]) {
-            -1.
-        } else {
-            0.
-        };
+            let x = if keys.any_pressed([KeyCode::Right, KeyCode::D]) {
+                1.
+            } else if keys.any_pressed([KeyCode::Left, KeyCode::A]) {
+                -1.
+            } else {
+                0.
+            };
 
-        velocity.linear = Vec2::new(x, y).normalize_or_zero().extend(0.) * PLAYER_SPEED;
+            velocity.linear = Vec2::new(x, y).normalize_or_zero().extend(0.) * PLAYER_SPEED;
+        }
     }
 }
 
-fn change_player_color(
+fn change_player_health(
     mut events: EventReader<CollisionEvent>,
-    parent_query: Query<(&Children, Entity), With<Player>>,
-    mut child_query: Query<&mut TextureAtlasSprite>,
+    mut parent_query: Query<(Entity, &mut Health), With<Player>>,
 ) {
-    let (children, entity) = parent_query.single();
+    let (entity, mut health) = parent_query.single_mut();
 
-    for &child in children.iter() {
-        if let Ok(mut sprite) = child_query.get_mut(child) {
-            for event in events.iter() {
-                if let CollisionEvent::Started(data1, data2) = event {
-                    let a = data1.collision_shape_entity();
-                    let b = data2.collision_shape_entity();
+    for event in events.iter() {
+        if let CollisionEvent::Started(data1, data2) = event {
+            let a = data1.collision_shape_entity();
+            let b = data2.collision_shape_entity();
 
-                    if a == entity || b == entity {
-                        sprite.color = HIT_PLAYER_COLOR;
-                        return;
+            if a == entity || b == entity {
+                *health = health.take_damage();
+                return;
+            }
+        }
+    }
+}
+
+fn animate_and_disable_dead_entities(
+    mut query: Query<(&Health, &mut RigidBody, &Children)>,
+    mut child_query: Query<(&mut Handle<SpriteSheetAnimation>, &CharactersAnimationsSet)>,
+) {
+    for (health, mut rigid_body, children) in query.iter_mut() {
+        if let Health::Empty = health {
+            *rigid_body = RigidBody::Sensor;
+            for &child in children.iter() {
+                if let Ok((mut animation, animations_set)) = child_query.get_mut(child) {
+                    if *animation != animations_set.death {
+                        *animation = animations_set.death.clone();
                     }
                 }
             }
-
-            sprite.color = Color::default();
         }
     }
 }
@@ -470,6 +521,7 @@ fn convert_enemies_under_converting_weapon(
     mut enemies_query: Query<(Entity, &mut UnderConvertingWeapon), With<Enemy>>,
     mut animations: ResMut<Assets<SpriteSheetAnimation>>,
     game_assets: Res<GameAssets>,
+    pink_selector_animations_set: Res<PinkSelectorAnimationsSet>,
 ) {
     if converting_weapon_timer.0.tick(time.delta()).finished() {
         converting_weapon_timer.0.reset();
@@ -510,7 +562,7 @@ fn convert_enemies_under_converting_weapon(
                                 texture_atlas: game_assets.pink_selector_01.clone(),
                                 ..Default::default()
                             })
-                            .insert(animations.add(PinkSelector::Full.animation()))
+                            .insert(pink_selector_animations_set.full.clone())
                             .insert(Play);
                     })
                     .insert(Ally)
@@ -545,6 +597,25 @@ fn change_love_animation(
                 Health::TwoThird => pink_selector_animations.two_third.clone(),
                 Health::Empty => pink_selector_animations.empty.clone(),
             };
+        }
+    }
+}
+
+fn change_health_animation(
+    red_selector_animations: Res<RedSelectorAnimationsSet>,
+    ally_query: Query<(&Children, &Health), (With<Player>, Changed<Health>)>,
+    mut child_query: Query<&mut Handle<SpriteSheetAnimation>, With<RedSelectorHealth>>,
+) {
+    for (children, health) in ally_query.iter() {
+        for child in children.iter() {
+            if let Ok(mut animation) = child_query.get_mut(*child) {
+                *animation = match health {
+                    Health::Full => red_selector_animations.full.clone(),
+                    Health::OneThird => red_selector_animations.one_third.clone(),
+                    Health::TwoThird => red_selector_animations.two_third.clone(),
+                    Health::Empty => red_selector_animations.empty.clone(),
+                };
+            }
         }
     }
 }
@@ -590,6 +661,7 @@ pub struct CharactersAnimationsSet {
     idle: Handle<SpriteSheetAnimation>,
     walk: Handle<SpriteSheetAnimation>,
     attack: Handle<SpriteSheetAnimation>,
+    death: Handle<SpriteSheetAnimation>,
 }
 
 #[derive(Component)]
@@ -601,17 +673,39 @@ pub struct PinkSelectorAnimationsSet {
 }
 
 #[derive(Component)]
+pub struct RedSelectorAnimationsSet {
+    full: Handle<SpriteSheetAnimation>,
+    two_third: Handle<SpriteSheetAnimation>,
+    one_third: Handle<SpriteSheetAnimation>,
+    empty: Handle<SpriteSheetAnimation>,
+}
+
+#[derive(Component)]
+pub struct RedSelectorHealth;
+
+#[derive(Component)]
 pub struct Enemy;
 
 #[derive(Component)]
 pub struct Ally;
 
-#[derive(Component)]
+#[derive(Copy, Clone, PartialEq, Eq, Component)]
 pub enum Health {
     Full,
     TwoThird,
     OneThird,
     Empty,
+}
+
+impl Health {
+    fn take_damage(&self) -> Health {
+        match self {
+            Health::Full => Health::TwoThird,
+            Health::TwoThird => Health::OneThird,
+            Health::OneThird => Health::Empty,
+            Health::Empty => Health::Empty,
+        }
+    }
 }
 
 #[derive(Default, Component)]
