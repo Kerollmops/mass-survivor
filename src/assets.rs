@@ -37,13 +37,13 @@ pub struct GameAssets {
     #[asset(path = "images/CastleIcons.png")]
     pub castle_icons: Handle<TextureAtlas>,
 
-    #[asset(texture_atlas(tile_size_x = 144., tile_size_y = 144., columns = 4, rows = 4))]
-    #[asset(path = "images/SmokeEffect01.png")]
-    pub smoke_effect_01: Handle<TextureAtlas>,
-
     #[asset(texture_atlas(tile_size_x = 144., tile_size_y = 144., columns = 5, rows = 4))]
     #[asset(path = "images/SmokeEffect07.png")]
     pub smoke_effect_07: Handle<TextureAtlas>,
+
+    #[asset(texture_atlas(tile_size_x = 16., tile_size_y = 16., columns = 8, rows = 1))]
+    #[asset(path = "images/PinkSelector01.png")]
+    pub pink_selector_01: Handle<TextureAtlas>,
 }
 
 #[derive(Copy, Clone)]

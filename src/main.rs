@@ -461,8 +461,7 @@ fn convert_enemies_under_converting_weapon(
     mut commands: Commands,
     mut converting_weapon_timer: ResMut<ConvertingWeaponTimer>,
     converting_weapon_query: Query<&GlobalTransform, With<ConvertingWeapon>>,
-    mut enemies_query: Query<(&mut UnderConvertingWeapon, &Children), With<Enemy>>,
-    mut texture_query: Query<&mut TextureAtlasSprite>,
+    mut enemies_query: Query<(Entity, &mut UnderConvertingWeapon), With<Enemy>>,
     mut animations: ResMut<Assets<SpriteSheetAnimation>>,
     game_assets: Res<GameAssets>,
 ) {
@@ -488,13 +487,31 @@ fn convert_enemies_under_converting_weapon(
             .insert(Play)
             .insert(ConvertingWeaponAnimation);
 
-        for (under_converting_weapon, children) in enemies_query.iter_mut() {
-            if under_converting_weapon.0 {
-                for child in children.iter() {
-                    if let Ok(mut texture_query) = texture_query.get_mut(*child) {
-                        texture_query.color = PINK_CONVERTING_WEAPON;
-                    }
-                }
+        let mut rng = rand::thread_rng();
+        for (entity, under_converting_weapon) in enemies_query.iter_mut() {
+            if under_converting_weapon.0 && rng.gen::<f32>() < 0.2 {
+                commands
+                    .entity(entity)
+                    .with_children(|parent| {
+                        // Spawn the love animation
+                        parent
+                            .spawn_bundle(SpriteSheetBundle {
+                                transform: Transform::from_translation(Vec3::new(0., 1.1, 0.)),
+                                sprite: TextureAtlasSprite {
+                                    custom_size: Some(Vec2::new(0.7, 0.7)),
+                                    ..Default::default()
+                                },
+                                texture_atlas: game_assets.pink_selector_01.clone(),
+                                ..Default::default()
+                            })
+                            .insert(animations.add(SpriteSheetAnimation::from_range(
+                                0..=7,
+                                Duration::from_secs_f64(1.0 / 12.0),
+                            )))
+                            .insert(Play);
+                    })
+                    .insert(Ally)
+                    .remove::<Enemy>();
             }
         }
     }
