@@ -9,8 +9,10 @@ use ordered_float::OrderedFloat;
 use rand::Rng;
 
 use self::assets::*;
+use self::game_collision::*;
 
 mod assets;
+mod game_collision;
 
 const MAP_SIZE: u32 = 41;
 const GRID_WIDTH: f32 = 0.05;
@@ -18,6 +20,7 @@ const PLAYER_SPEED: f32 = 3.0;
 const UNITS_Z_INDEX: f32 = 90.0;
 const CONVERTING_WEAPON_DISTANCE: f32 = 3.5;
 const PINK_CONVERTING_WEAPON: Color = Color::rgba(1., 0.584, 0.753, 1.);
+const INVULNERABLE_DURATION: Duration = Duration::from_millis(2 * 1000 + 500); // 2.5s
 
 const HIT_PLAYER_COLOR: Color = Color::rgb(0.9, 0.027, 0.);
 
@@ -28,7 +31,8 @@ fn main() {
         .with_collection::<GameAssets>()
         .build(&mut app);
 
-    app.add_state(MyStates::AssetLoading)
+    app.add_event::<GameCollisionEvent>()
+        .add_state(MyStates::AssetLoading)
         .insert_resource(ClearColor(Color::rgb(0.53, 0.53, 0.53)))
         .insert_resource(ConvertingWeaponTimer(Timer::new(Duration::from_secs(2), false)))
         .add_plugins(DefaultPlugins)
@@ -45,11 +49,13 @@ fn main() {
         )
         .add_system_set(
             SystemSet::on_update(MyStates::Next)
+                .with_system(produce_game_collision_events)
+                .with_system(tick_invulnerable)
+                .with_system(display_player_invulnerability)
                 .with_system(follow_nearest_player)
                 .with_system(follow_nearest_enemy)
                 .with_system(move_player)
-                .with_system(change_player_health)
-                .with_system(player_loot_gems)
+                .with_system(player_manage_damage)
                 .with_system(move_converting_weapon_from_velocity)
                 .with_system(mark_enemies_under_converting_weapon)
                 .with_system(convert_enemies_under_converting_weapon)
@@ -144,12 +150,13 @@ fn spawn_player(
             border_radius: None,
         })
         .insert(RotationConstraints::lock())
-        .insert(CollisionLayers::none().with_group(GameLayer::Player).with_masks(&[
-            GameLayer::Gem,
-            GameLayer::Stuff,
-            GameLayer::Enemy,
-        ]))
+        .insert(
+            CollisionLayers::none()
+                .with_group(GameLayer::Player)
+                .with_masks(&[GameLayer::Ally, GameLayer::Enemy]),
+        )
         .insert(Health::Full)
+        .insert(Invulnerable::from_seconds(INVULNERABLE_DURATION))
         .insert(Player)
         .with_children(|parent| {
             // spawn the sprite
@@ -166,7 +173,8 @@ fn spawn_player(
                 // animation settings
                 .insert(animations_set.idle.clone())
                 .insert(animations_set)
-                .insert(Play);
+                .insert(Play)
+                .insert(MainEntitySprite);
 
             // spawn the pink selector on the player
             parent
@@ -198,7 +206,7 @@ fn spawn_player(
                 .insert(
                     CollisionLayers::none()
                         .with_group(GameLayer::ConvertingWeapon)
-                        .with_mask(GameLayer::Enemy),
+                        .with_masks(&[GameLayer::Ally, GameLayer::Enemy]),
                 )
                 .insert(ConvertingWeapon);
         });
@@ -258,6 +266,7 @@ fn spawn_ennemies(
                 .insert(RotationConstraints::lock())
                 .insert(CollisionLayers::none().with_group(GameLayer::Enemy).with_masks(&[
                     GameLayer::Player,
+                    GameLayer::Ally,
                     GameLayer::Enemy,
                     GameLayer::ConvertingWeapon,
                 ]))
@@ -425,20 +434,17 @@ fn move_player(
     }
 }
 
-fn change_player_health(
-    mut events: EventReader<CollisionEvent>,
-    mut parent_query: Query<(Entity, &mut Health), With<Player>>,
+fn player_manage_damage(
+    mut events: EventReader<GameCollisionEvent>,
+    mut parent_query: Query<(&mut Health, &mut Invulnerable), With<Player>>,
 ) {
-    let (entity, mut health) = parent_query.single_mut();
+    let (mut health, mut invulnerable) = parent_query.single_mut();
 
-    for event in events.iter() {
-        if let CollisionEvent::Started(data1, data2) = event {
-            let a = data1.collision_shape_entity();
-            let b = data2.collision_shape_entity();
-
-            if a == entity || b == entity {
+    if invulnerable.finished() {
+        for event in events.iter() {
+            if let GameCollisionEvent::PlayerAndEnemy { status, player, enemy } = event {
                 *health = health.take_damage();
-                return;
+                invulnerable.reset();
             }
         }
     }
@@ -462,55 +468,22 @@ fn animate_and_disable_dead_entities(
     }
 }
 
-fn player_loot_gems(
-    mut commands: Commands,
-    _player_query: Query<&mut Player>,
-    mut events: EventReader<CollisionEvent>,
-) {
-    // let mut player = player_query.single_mut();
-
-    events
-        .iter()
-        .filter(|e| e.is_started())
-        .filter_map(|event| {
-            let (entity_1, entity_2) = event.rigid_body_entities();
-            let (layers_1, layers_2) = event.collision_layers();
-            if is_player_layer(layers_1) && is_gem_layer(layers_2) {
-                Some(entity_2)
-            } else if is_player_layer(layers_2) && is_gem_layer(layers_1) {
-                Some(entity_1)
-            } else {
-                None
-            }
-        })
-        .for_each(|gem_entity| {
-            // player.xp += 1;
-            commands.entity(gem_entity).despawn();
-        });
-}
-
 fn mark_enemies_under_converting_weapon(
-    mut events: EventReader<CollisionEvent>,
+    mut events: EventReader<GameCollisionEvent>,
     mut enemies_query: Query<&mut UnderConvertingWeapon, With<Enemy>>,
 ) {
-    events
-        .iter()
-        .filter_map(|event| {
-            let (entity_1, entity_2) = event.rigid_body_entities();
-            let (layers_1, layers_2) = event.collision_layers();
-            if is_converting_weapon_layer(layers_1) && is_enemy_layer(layers_2) {
-                Some((event, entity_2))
-            } else if is_converting_weapon_layer(layers_2) && is_enemy_layer(layers_1) {
-                Some((event, entity_1))
-            } else {
-                None
+    use GameCollisionEvent::ConvertingWeaponAndEnemy;
+
+    for event in events.iter() {
+        if let ConvertingWeaponAndEnemy { status, converting_weapon, enemy } = event {
+            if let Ok(mut under_converting_weapon) = enemies_query.get_mut(*enemy) {
+                match status {
+                    CollisionStatus::Started => under_converting_weapon.0 = true,
+                    CollisionStatus::Stopped => under_converting_weapon.0 = false,
+                }
             }
-        })
-        .for_each(|(event, enemy_entity)| {
-            if let Ok(mut under_converting_weapon) = enemies_query.get_mut(enemy_entity) {
-                under_converting_weapon.0 = event.is_started();
-            }
-        });
+        }
+    }
 }
 
 fn convert_enemies_under_converting_weapon(
@@ -565,6 +538,12 @@ fn convert_enemies_under_converting_weapon(
                             .insert(pink_selector_animations_set.full.clone())
                             .insert(Play);
                     })
+                    .insert(CollisionLayers::none().with_group(GameLayer::Ally).with_masks(&[
+                        GameLayer::Player,
+                        GameLayer::Ally,
+                        GameLayer::Enemy,
+                        GameLayer::ConvertingWeapon,
+                    ]))
                     .insert(Ally)
                     .remove::<Enemy>();
             }
@@ -620,20 +599,27 @@ fn change_health_animation(
     }
 }
 
-fn is_player_layer(layers: CollisionLayers) -> bool {
-    layers.contains_group(GameLayer::Player)
+fn tick_invulnerable(time: Res<Time>, mut player_query: Query<&mut Invulnerable, With<Player>>) {
+    for mut invulnerable in player_query.iter_mut() {
+        invulnerable.tick(time.delta());
+    }
 }
 
-fn is_gem_layer(layers: CollisionLayers) -> bool {
-    layers.contains_group(GameLayer::Gem)
-}
-
-fn is_enemy_layer(layers: CollisionLayers) -> bool {
-    layers.contains_group(GameLayer::Enemy)
-}
-
-fn is_converting_weapon_layer(layers: CollisionLayers) -> bool {
-    layers.contains_group(GameLayer::ConvertingWeapon)
+fn display_player_invulnerability(
+    mut player_query: Query<(&Invulnerable, &Children), With<Player>>,
+    mut child_query: Query<&mut TextureAtlasSprite, With<MainEntitySprite>>,
+) {
+    for (invulnerable, children) in player_query.iter_mut() {
+        for child in children.iter() {
+            if let Ok(mut texture_atlas_sprite) = child_query.get_mut(*child) {
+                if invulnerable.finished() {
+                    texture_atlas_sprite.color = Color::default();
+                } else {
+                    texture_atlas_sprite.color = Color::RED;
+                }
+            }
+        }
+    }
 }
 
 fn camera_follow(
@@ -684,6 +670,9 @@ pub struct RedSelectorAnimationsSet {
 pub struct RedSelectorHealth;
 
 #[derive(Component)]
+pub struct MainEntitySprite;
+
+#[derive(Component)]
 pub struct Enemy;
 
 #[derive(Component)]
@@ -712,6 +701,30 @@ impl Health {
 pub struct Player;
 
 #[derive(Component)]
+pub struct Invulnerable(Timer);
+
+impl Invulnerable {
+    fn from_seconds(duration: Duration) -> Invulnerable {
+        let mut timer = Timer::new(duration, false);
+        timer.tick(duration);
+        Invulnerable(timer)
+    }
+
+    fn reset(&mut self) {
+        self.0.reset();
+    }
+
+    fn tick(&mut self, duration: Duration) -> &Invulnerable {
+        self.0.tick(duration);
+        self
+    }
+
+    fn finished(&self) -> bool {
+        self.0.finished()
+    }
+}
+
+#[derive(Component)]
 pub struct Gem;
 
 #[derive(Component)]
@@ -723,16 +736,6 @@ impl Default for FollowNearest {
     fn default() -> FollowNearest {
         FollowNearest { max_speed: 0.5 }
     }
-}
-
-#[derive(PhysicsLayer)]
-pub enum GameLayer {
-    Player,
-    Weapon,
-    ConvertingWeapon,
-    Enemy,
-    Gem,
-    Stuff,
 }
 
 #[derive(Component)]
