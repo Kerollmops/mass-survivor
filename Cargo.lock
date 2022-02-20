@@ -1680,9 +1680,9 @@ dependencies = [
 
 [[package]]
 name = "heron"
-version = "1.1.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54579e36436e33827e21f046ea6752b3a93dbd0b05884bffe982568af7b3bebd"
+checksum = "82240c83ae8219c4dea8f778283fd65ece2c6e593c0d76149b1fe70fc7fee670"
 dependencies = [
  "bevy",
  "cfg_aliases",
@@ -1694,20 +1694,21 @@ dependencies = [
 
 [[package]]
 name = "heron_core"
-version = "1.1.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7099a07736abf70026b1e474fff8d74a8fa88a834cfd33e974541e6b056abb41"
+checksum = "7f71eae18f89741c4c2102cf1ecb70620fc74e2b939e16a651af54becc9fc2bf"
 dependencies = [
  "bevy",
  "cfg_aliases",
  "duplicate",
+ "smallvec",
 ]
 
 [[package]]
 name = "heron_debug"
-version = "1.1.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5369f602ce29289fb86fdf65087ae2dcaa291bb1e16a697f99e9b627d7141a99"
+checksum = "d8c3c38972fedb335d45235508722cac717038f81f391d6f069a42c4e61e89f9"
 dependencies = [
  "bevy",
  "bevy_prototype_lyon",
@@ -1719,9 +1720,9 @@ dependencies = [
 
 [[package]]
 name = "heron_macros"
-version = "1.1.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a09c1e02655f04faf8d6b485f6c27422f3769343c30c39e51a2cd25f3f2869c3"
+checksum = "cad70098466897f6a39e8c8388ee06bc91b70f3773ac61b02fa63a269b19f68c"
 dependencies = [
  "quote",
  "syn",
@@ -1729,9 +1730,9 @@ dependencies = [
 
 [[package]]
 name = "heron_rapier"
-version = "1.1.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bf94fface67dce71dfd0ab2c0a8b211cacf7b1d02532669671892350765b340"
+checksum = "fd77b7c24655b8b5a3d45f4eb74f19a410a7417f98b21710b5886379093a27ba"
 dependencies = [
  "bevy",
  "cfg_aliases",
