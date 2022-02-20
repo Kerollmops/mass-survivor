@@ -22,8 +22,6 @@ const CONVERTING_WEAPON_DISTANCE: f32 = 3.5;
 const PINK_CONVERTING_WEAPON: Color = Color::rgba(1., 0.584, 0.753, 1.);
 const INVULNERABLE_DURATION: Duration = Duration::from_millis(2 * 1000 + 500); // 2.5s
 
-const HIT_PLAYER_COLOR: Color = Color::rgb(0.9, 0.027, 0.);
-
 fn main() {
     let mut app = App::new();
     AssetLoader::new(MyStates::AssetLoading)
@@ -55,7 +53,8 @@ fn main() {
                 .with_system(follow_nearest_player)
                 .with_system(follow_nearest_enemy)
                 .with_system(move_player)
-                .with_system(player_manage_damage)
+                .with_system(mark_player_as_taking_damage)
+                .with_system(applying_player_damage)
                 .with_system(move_converting_weapon_from_velocity)
                 .with_system(mark_enemies_under_converting_weapon)
                 .with_system(convert_enemies_under_converting_weapon)
@@ -156,6 +155,7 @@ fn spawn_player(
                 .with_masks(&[GameLayer::Ally, GameLayer::Enemy]),
         )
         .insert(Health::Full)
+        .insert(TakingDamage::default())
         .insert(Invulnerable::from_seconds(INVULNERABLE_DURATION))
         .insert(Player)
         .with_children(|parent| {
@@ -434,18 +434,33 @@ fn move_player(
     }
 }
 
-fn player_manage_damage(
+fn mark_player_as_taking_damage(
     mut events: EventReader<GameCollisionEvent>,
-    mut parent_query: Query<(&mut Health, &mut Invulnerable), With<Player>>,
+    mut player_query: Query<&mut TakingDamage, With<Player>>,
 ) {
-    let (mut health, mut invulnerable) = parent_query.single_mut();
+    let mut taking_damage = player_query.single_mut();
+
+    for event in events.iter() {
+        if let GameCollisionEvent::PlayerAndEnemy { status, .. } = event {
+            match status {
+                CollisionStatus::Started => taking_damage.count += 1,
+                CollisionStatus::Stopped => {
+                    taking_damage.count = taking_damage.count.saturating_sub(1)
+                }
+            }
+        }
+    }
+}
+
+fn applying_player_damage(
+    mut player_query: Query<(&TakingDamage, &mut Invulnerable, &mut Health), With<Player>>,
+) {
+    let (taking_damage, mut invulnerable, mut health) = player_query.single_mut();
 
     if invulnerable.finished() {
-        for event in events.iter() {
-            if let GameCollisionEvent::PlayerAndEnemy { status, player, enemy } = event {
-                *health = health.take_damage();
-                invulnerable.reset();
-            }
+        for _ in 0..taking_damage.count {
+            invulnerable.reset();
+            *health = health.take_damage();
         }
     }
 }
@@ -475,7 +490,7 @@ fn mark_enemies_under_converting_weapon(
     use GameCollisionEvent::ConvertingWeaponAndEnemy;
 
     for event in events.iter() {
-        if let ConvertingWeaponAndEnemy { status, converting_weapon, enemy } = event {
+        if let ConvertingWeaponAndEnemy { status, enemy, .. } = event {
             if let Ok(mut under_converting_weapon) = enemies_query.get_mut(*enemy) {
                 match status {
                     CollisionStatus::Started => under_converting_weapon.0 = true,
@@ -695,6 +710,11 @@ impl Health {
             Health::Empty => Health::Empty,
         }
     }
+}
+
+#[derive(Default, Component)]
+pub struct TakingDamage {
+    count: usize,
 }
 
 #[derive(Default, Component)]
