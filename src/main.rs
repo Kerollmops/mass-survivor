@@ -7,6 +7,7 @@ use bevy_tweening::*;
 use heron::prelude::*;
 use ordered_float::OrderedFloat;
 use rand::Rng;
+use wasm_bindgen::prelude::*;
 
 use self::assets::*;
 use self::game_collision::*;
@@ -21,6 +22,13 @@ const UNITS_Z_INDEX: f32 = 90.0;
 const CONVERTING_WEAPON_DISTANCE: f32 = 3.5;
 const PINK_CONVERTING_WEAPON: Color = Color::rgba(1., 0.584, 0.753, 1.);
 const INVULNERABLE_DURATION: Duration = Duration::from_millis(2 * 1000 + 500); // 2.5s
+
+// For wasm-pack to be happy...
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub fn wasm_main() {
+    main();
+}
 
 fn main() {
     let mut app = App::new();

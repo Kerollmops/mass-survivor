@@ -3,6 +3,10 @@ name = "mass-survivor"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/main.rs"
+
 [dependencies]
 benimator = "2.0.1"
 bevy = "0.6.1"
@@ -11,6 +15,7 @@ bevy_tweening = "0.3.1"
 heron = { version = "2.0.0", features = ["2d"] }
 ordered-float = "2.10.0"
 rand = "0.8.4"
+wasm-bindgen = "0.2.79"
 
 [features]
 debug-2d = ["heron/debug-2d"]

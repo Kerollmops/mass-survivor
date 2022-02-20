@@ -2071,6 +2071,7 @@ dependencies = [
  "heron",
  "ordered-float",
  "rand",
+ "wasm-bindgen",
 ]
 
 [[package]]
