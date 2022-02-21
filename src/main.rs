@@ -22,6 +22,7 @@ const UNITS_Z_INDEX: f32 = 90.0;
 const CONVERTING_WEAPON_DISTANCE: f32 = 3.5;
 const PINK_CONVERTING_WEAPON: Color = Color::rgba(1., 0.584, 0.753, 1.);
 const INVULNERABLE_DURATION: Duration = Duration::from_millis(2 * 1000 + 500); // 2.5s
+const CHARMED_DURATION: Duration = Duration::from_millis(25 * 1000); // 25s
 
 // For wasm-pack to be happy...
 #[cfg(target_arch = "wasm32")]
@@ -57,7 +58,9 @@ fn main() {
             SystemSet::on_update(MyStates::Next)
                 .with_system(produce_game_collision_events)
                 .with_system(tick_invulnerable)
-                .with_system(display_player_invulnerability)
+                .with_system(display_invulnerability)
+                .with_system(tick_charmed)
+                .with_system(change_charmed_animation)
                 .with_system(follow_nearest_player)
                 .with_system(follow_nearest_enemy)
                 .with_system(move_player)
@@ -65,8 +68,7 @@ fn main() {
                 .with_system(applying_player_damage)
                 .with_system(move_converting_weapon_from_velocity)
                 .with_system(mark_enemies_under_converting_weapon)
-                .with_system(convert_enemies_under_converting_weapon)
-                .with_system(change_love_animation)
+                .with_system(charm_entities_under_converting_weapon)
                 .with_system(change_health_animation)
                 .with_system(animate_and_disable_dead_entities),
         )
@@ -164,7 +166,11 @@ fn spawn_player(
         )
         .insert(Health::Full)
         .insert(TakingDamage::default())
-        .insert(Invulnerable(Timer::new(INVULNERABLE_DURATION, false)))
+        .insert(Invulnerable({
+            let mut timer = Timer::new(INVULNERABLE_DURATION, false);
+            timer.tick(INVULNERABLE_DURATION);
+            timer
+        }))
         .insert(Player)
         .with_children(|parent| {
             // spawn the sprite
@@ -493,13 +499,13 @@ fn animate_and_disable_dead_entities(
 
 fn mark_enemies_under_converting_weapon(
     mut events: EventReader<GameCollisionEvent>,
-    mut enemies_query: Query<&mut UnderConvertingWeapon, With<Enemy>>,
+    mut query: Query<&mut UnderConvertingWeapon>,
 ) {
     use GameCollisionEvent::ConvertingWeaponAndEnemy;
 
     for event in events.iter() {
         if let ConvertingWeaponAndEnemy { status, enemy, .. } = event {
-            if let Ok(mut under_converting_weapon) = enemies_query.get_mut(*enemy) {
+            if let Ok(mut under_converting_weapon) = query.get_mut(*enemy) {
                 match status {
                     CollisionStatus::Started => under_converting_weapon.0 = true,
                     CollisionStatus::Stopped => under_converting_weapon.0 = false,
@@ -509,12 +515,13 @@ fn mark_enemies_under_converting_weapon(
     }
 }
 
-fn convert_enemies_under_converting_weapon(
+fn charm_entities_under_converting_weapon(
     time: Res<Time>,
     mut commands: Commands,
     mut converting_weapon_timer: ResMut<ConvertingWeaponTimer>,
     converting_weapon_query: Query<&GlobalTransform, With<ConvertingWeapon>>,
-    mut enemies_query: Query<(Entity, &mut UnderConvertingWeapon), With<Enemy>>,
+    mut enemies_query: Query<(Entity, &UnderConvertingWeapon), With<Enemy>>,
+    mut allies_query: Query<(&UnderConvertingWeapon, &mut Charmed), With<Ally>>,
     mut animations: ResMut<Assets<SpriteSheetAnimation>>,
     game_assets: Res<GameAssets>,
     pink_selector_animations_set: Res<PinkSelectorAnimationsSet>,
@@ -546,6 +553,15 @@ fn convert_enemies_under_converting_weapon(
             if under_converting_weapon.0 && rng.gen::<f32>() < 0.2 {
                 commands
                     .entity(entity)
+                    .insert(CollisionLayers::none().with_group(GameLayer::Ally).with_masks(&[
+                        GameLayer::Player,
+                        GameLayer::Ally,
+                        GameLayer::Enemy,
+                        GameLayer::ConvertingWeapon,
+                    ]))
+                    .insert(Charmed(Timer::new(CHARMED_DURATION, false)))
+                    .insert(Ally)
+                    .remove::<Enemy>()
                     .with_children(|parent| {
                         // Spawn the love animation
                         parent
@@ -559,16 +575,15 @@ fn convert_enemies_under_converting_weapon(
                                 ..Default::default()
                             })
                             .insert(pink_selector_animations_set.full.clone())
+                            .insert(CharmedAnimation)
                             .insert(Play);
-                    })
-                    .insert(CollisionLayers::none().with_group(GameLayer::Ally).with_masks(&[
-                        GameLayer::Player,
-                        GameLayer::Ally,
-                        GameLayer::Enemy,
-                        GameLayer::ConvertingWeapon,
-                    ]))
-                    .insert(Ally)
-                    .remove::<Enemy>();
+                    });
+            }
+        }
+
+        for (under_converting_weapon, mut charmed) in allies_query.iter_mut() {
+            if under_converting_weapon.0 && rng.gen::<f32>() < 0.2 {
+                charmed.0.reset();
             }
         }
     }
@@ -582,23 +597,6 @@ fn delete_converting_weapon_animation(
     for entity in removals.iter() {
         if let Ok(_) = animation_query.get(entity) {
             commands.entity(entity).despawn();
-        }
-    }
-}
-
-fn change_love_animation(
-    pink_selector_animations: Res<PinkSelectorAnimationsSet>,
-    ally_query: Query<(&Children, &Health), (With<Ally>, Changed<Health>)>,
-    mut child_query: Query<&mut Handle<SpriteSheetAnimation>>,
-) {
-    for (children, health) in ally_query.iter() {
-        if let Ok(mut animation) = child_query.get_mut(children[0]) {
-            *animation = match health {
-                Health::Full => pink_selector_animations.full.clone(),
-                Health::OneThird => pink_selector_animations.one_third.clone(),
-                Health::TwoThird => pink_selector_animations.two_third.clone(),
-                Health::Empty => pink_selector_animations.empty.clone(),
-            };
         }
     }
 }
@@ -622,17 +620,17 @@ fn change_health_animation(
     }
 }
 
-fn tick_invulnerable(time: Res<Time>, mut player_query: Query<&mut Invulnerable, With<Player>>) {
-    for mut invulnerable in player_query.iter_mut() {
+fn tick_invulnerable(time: Res<Time>, mut invulnerable_query: Query<&mut Invulnerable>) {
+    for mut invulnerable in invulnerable_query.iter_mut() {
         invulnerable.0.tick(time.delta());
     }
 }
 
-fn display_player_invulnerability(
-    mut player_query: Query<(&Invulnerable, &Children), With<Player>>,
+fn display_invulnerability(
+    mut invulnerable_query: Query<(&Invulnerable, &Children)>,
     mut child_query: Query<&mut TextureAtlasSprite, With<MainEntitySprite>>,
 ) {
-    for (invulnerable, children) in player_query.iter_mut() {
+    for (invulnerable, children) in invulnerable_query.iter_mut() {
         for child in children.iter() {
             if let Ok(mut texture_atlas_sprite) = child_query.get_mut(*child) {
                 if invulnerable.0.finished() {
@@ -640,6 +638,36 @@ fn display_player_invulnerability(
                 } else {
                     texture_atlas_sprite.color = Color::RED;
                 }
+            }
+        }
+    }
+}
+
+fn tick_charmed(time: Res<Time>, mut charmed_query: Query<&mut Charmed>) {
+    for mut charmed in charmed_query.iter_mut() {
+        charmed.0.tick(time.delta());
+    }
+}
+
+fn change_charmed_animation(
+    charmed_query: Query<(&Charmed, &Children)>,
+    mut child_query: Query<&mut Handle<SpriteSheetAnimation>, With<CharmedAnimation>>,
+    pink_selector_animations: Res<PinkSelectorAnimationsSet>,
+) {
+    for (charmed, children) in charmed_query.iter() {
+        let new_animation = if charmed.0.percent_left() > 0.75 {
+            &pink_selector_animations.full
+        } else if charmed.0.percent_left() > 0.50 {
+            &pink_selector_animations.two_third
+        } else if charmed.0.percent_left() > 0.25 {
+            &pink_selector_animations.one_third
+        } else {
+            &pink_selector_animations.empty
+        };
+
+        for child in children.iter() {
+            if let Ok(mut animation) = child_query.get_mut(*child) {
+                *animation = new_animation.clone();
             }
         }
     }
@@ -730,6 +758,12 @@ pub struct Player;
 
 #[derive(Component)]
 pub struct Invulnerable(Timer);
+
+#[derive(Component)]
+pub struct Charmed(Timer);
+
+#[derive(Component)]
+pub struct CharmedAnimation;
 
 #[derive(Component)]
 pub struct Gem;
