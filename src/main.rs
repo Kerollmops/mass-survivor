@@ -164,7 +164,7 @@ fn spawn_player(
         )
         .insert(Health::Full)
         .insert(TakingDamage::default())
-        .insert(Invulnerable::from_seconds(INVULNERABLE_DURATION))
+        .insert(Invulnerable(Timer::new(INVULNERABLE_DURATION, false)))
         .insert(Player)
         .with_children(|parent| {
             // spawn the sprite
@@ -465,9 +465,9 @@ fn applying_player_damage(
 ) {
     let (taking_damage, mut invulnerable, mut health) = player_query.single_mut();
 
-    if invulnerable.finished() {
+    if invulnerable.0.finished() {
         for _ in 0..taking_damage.count {
-            invulnerable.reset();
+            invulnerable.0.reset();
             *health = health.take_damage();
         }
     }
@@ -624,7 +624,7 @@ fn change_health_animation(
 
 fn tick_invulnerable(time: Res<Time>, mut player_query: Query<&mut Invulnerable, With<Player>>) {
     for mut invulnerable in player_query.iter_mut() {
-        invulnerable.tick(time.delta());
+        invulnerable.0.tick(time.delta());
     }
 }
 
@@ -635,7 +635,7 @@ fn display_player_invulnerability(
     for (invulnerable, children) in player_query.iter_mut() {
         for child in children.iter() {
             if let Ok(mut texture_atlas_sprite) = child_query.get_mut(*child) {
-                if invulnerable.finished() {
+                if invulnerable.0.finished() {
                     texture_atlas_sprite.color = Color::default();
                 } else {
                     texture_atlas_sprite.color = Color::RED;
@@ -730,27 +730,6 @@ pub struct Player;
 
 #[derive(Component)]
 pub struct Invulnerable(Timer);
-
-impl Invulnerable {
-    fn from_seconds(duration: Duration) -> Invulnerable {
-        let mut timer = Timer::new(duration, false);
-        timer.tick(duration);
-        Invulnerable(timer)
-    }
-
-    fn reset(&mut self) {
-        self.0.reset();
-    }
-
-    fn tick(&mut self, duration: Duration) -> &Invulnerable {
-        self.0.tick(duration);
-        self
-    }
-
-    fn finished(&self) -> bool {
-        self.0.finished()
-    }
-}
 
 #[derive(Component)]
 pub struct Gem;
