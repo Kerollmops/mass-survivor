@@ -19,10 +19,11 @@ const MAP_SIZE: u32 = 41;
 const GRID_WIDTH: f32 = 0.05;
 const PLAYER_SPEED: f32 = 3.0;
 const UNITS_Z_INDEX: f32 = 90.0;
-const CONVERTING_WEAPON_DISTANCE: f32 = 3.5;
-const PINK_CONVERTING_WEAPON: Color = Color::rgba(1., 0.584, 0.753, 1.);
+const CHARMING_PINK: Color = Color::rgba(1., 0.584, 0.753, 1.);
 const INVULNERABLE_DURATION: Duration = Duration::from_millis(2 * 1000 + 500); // 2.5s
 const CHARMED_DURATION: Duration = Duration::from_millis(25 * 1000); // 25s
+const CHARMING_AREA_COOLDOWN: Duration = Duration::from_secs(2);
+const LUCK_AT_CHARMING: f32 = 0.2;
 
 // For wasm-pack to be happy...
 #[cfg(target_arch = "wasm32")]
@@ -39,9 +40,9 @@ fn main() {
         .build(&mut app);
 
     app.add_event::<GameCollisionEvent>()
+        .add_event::<AllyEnemyConvertionEvent>()
         .add_state(MyStates::AssetLoading)
         .insert_resource(ClearColor(Color::rgb(0.53, 0.53, 0.53)))
-        .insert_resource(ConvertingWeaponTimer(Timer::new(Duration::from_secs(2), false)))
         .add_plugins(DefaultPlugins)
         .add_plugin(AnimationPlugin::default())
         .add_plugin(TweeningPlugin)
@@ -59,20 +60,24 @@ fn main() {
                 .with_system(produce_game_collision_events)
                 .with_system(tick_invulnerable)
                 .with_system(display_invulnerability)
+                .with_system(mark_charmed_eligibles)
                 .with_system(tick_charmed)
+                .with_system(tick_charming_areas)
+                .with_system(charm_enemies)
+                .with_system(refresh_allies_charming)
+                .with_system(uncharm_allies)
+                .with_system(hide_charming_animation)
+                .with_system(mark_charmed_eligibles)
                 .with_system(change_charmed_animation)
                 .with_system(follow_nearest_player)
                 .with_system(follow_nearest_enemy)
                 .with_system(move_player)
                 .with_system(mark_player_as_taking_damage)
                 .with_system(applying_player_damage)
-                .with_system(move_converting_weapon_from_velocity)
-                .with_system(mark_enemies_under_converting_weapon)
-                .with_system(charm_entities_under_converting_weapon)
                 .with_system(change_health_animation)
                 .with_system(animate_and_disable_dead_entities),
         )
-        .add_system_to_stage(CoreStage::PostUpdate, delete_converting_weapon_animation)
+        .add_system_to_stage(CoreStage::PostUpdate, hide_charming_animation)
         .add_system_to_stage(CoreStage::PostUpdate, change_animation_from_velocity)
         .add_system_to_stage(CoreStage::PostUpdate, reorder_sprite_units)
         .run();
@@ -166,11 +171,13 @@ fn spawn_player(
         )
         .insert(Health::Full)
         .insert(TakingDamage::default())
-        .insert(Invulnerable({
-            let mut timer = Timer::new(INVULNERABLE_DURATION, false);
-            timer.tick(INVULNERABLE_DURATION);
-            timer
-        }))
+        .insert(Invulnerable {
+            active_until: {
+                let mut timer = Timer::new(INVULNERABLE_DURATION, false);
+                timer.tick(INVULNERABLE_DURATION);
+                timer
+            },
+        })
         .insert(Player)
         .with_children(|parent| {
             // spawn the sprite
@@ -190,7 +197,7 @@ fn spawn_player(
                 .insert(Play)
                 .insert(MainEntitySprite);
 
-            // spawn the pink selector on the player
+            // spawn the player health
             parent
                 .spawn_bundle(SpriteSheetBundle {
                     transform: Transform::from_translation(Vec3::new(0., 1.1, 0.)),
@@ -205,24 +212,36 @@ fn spawn_player(
                 .insert(Play)
                 .insert(RedSelectorHealth);
 
-            // spawn the converting weapon
+            // spawn the converting weapon and the charming area but make it invisible
             parent
-                .spawn()
-                .insert(Transform::from_translation(Vec3::new(
-                    CONVERTING_WEAPON_DISTANCE,
-                    0.,
-                    UNITS_Z_INDEX,
-                )))
-                .insert(GlobalTransform::default())
+                .spawn_bundle(SpriteSheetBundle {
+                    sprite: TextureAtlasSprite {
+                        color: CHARMING_PINK,
+                        custom_size: Some(Vec2::new(5., 5.)),
+                        ..Default::default()
+                    },
+                    texture_atlas: game_assets.smoke_effect_01.clone(),
+                    visibility: Visibility { is_visible: false },
+                    ..Default::default()
+                })
                 .insert(RigidBody::Sensor)
                 .insert(CollisionShape::Sphere { radius: 1.8 })
                 .insert(RotationConstraints::lock())
                 .insert(
                     CollisionLayers::none()
-                        .with_group(GameLayer::ConvertingWeapon)
+                        .with_group(GameLayer::CharmingArea)
                         .with_masks(&[GameLayer::Ally, GameLayer::Enemy]),
                 )
-                .insert(ConvertingWeapon);
+                .insert(CharmingArea { active_in: Timer::new(CHARMING_AREA_COOLDOWN, false) })
+                .insert(
+                    animations.add(
+                        SpriteSheetAnimation::from_range(
+                            0..=15,
+                            Duration::from_secs_f64(1.0 / 18.0),
+                        )
+                        .once(),
+                    ),
+                );
         });
 }
 
@@ -282,11 +301,11 @@ fn spawn_ennemies(
                     GameLayer::Player,
                     GameLayer::Ally,
                     GameLayer::Enemy,
-                    GameLayer::ConvertingWeapon,
+                    GameLayer::CharmingArea,
                 ]))
                 .insert(Enemy)
                 .insert(FollowNearest { max_speed: rng.gen_range(0.2..=1.2) })
-                .insert(UnderConvertingWeapon(false))
+                .insert(CharmedEligible { is_eligible: false })
                 .with_children(|parent| {
                     parent
                         .spawn_bundle(SpriteSheetBundle {
@@ -338,33 +357,6 @@ fn change_animation_from_velocity(
                     } else {
                         *animation = animations_set.walk.clone();
                     }
-                }
-            }
-        }
-    }
-}
-
-fn move_converting_weapon_from_velocity(
-    parent_query: Query<(&Velocity, &Children)>,
-    mut child_query: Query<&mut Transform, With<ConvertingWeapon>>,
-) {
-    for (velocity, children) in parent_query.iter() {
-        for &child in children.iter() {
-            if let Ok(mut transform) = child_query.get_mut(child) {
-                if velocity.linear[0] > 0. {
-                    transform.translation[0] = CONVERTING_WEAPON_DISTANCE;
-                } else if velocity.linear[0] < 0. {
-                    transform.translation[0] = -CONVERTING_WEAPON_DISTANCE;
-                } else if velocity.linear[1] != 0. {
-                    transform.translation[0] = 0.;
-                }
-
-                if velocity.linear[1] > 0. {
-                    transform.translation[1] = CONVERTING_WEAPON_DISTANCE;
-                } else if velocity.linear[1] < 0. {
-                    transform.translation[1] = -CONVERTING_WEAPON_DISTANCE;
-                } else if velocity.linear[0] != 0. {
-                    transform.translation[1] = 0.;
                 }
             }
         }
@@ -471,9 +463,9 @@ fn applying_player_damage(
 ) {
     let (taking_damage, mut invulnerable, mut health) = player_query.single_mut();
 
-    if invulnerable.0.finished() {
+    if invulnerable.active_until.finished() {
         for _ in 0..taking_damage.count {
-            invulnerable.0.reset();
+            invulnerable.active_until.reset();
             *health = health.take_damage();
         }
     }
@@ -497,106 +489,152 @@ fn animate_and_disable_dead_entities(
     }
 }
 
-fn mark_enemies_under_converting_weapon(
-    mut events: EventReader<GameCollisionEvent>,
-    mut query: Query<&mut UnderConvertingWeapon>,
+fn tick_charming_areas(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut charming_areas: Query<(Entity, &mut Visibility, &mut CharmingArea)>,
+    eligible_query: Query<(Entity, &CharmedEligible, Option<&Ally>, Option<&Enemy>)>,
+    mut convertion_writer: EventWriter<AllyEnemyConvertionEvent>,
 ) {
-    use GameCollisionEvent::ConvertingWeaponAndEnemy;
+    use AllyEnemyConvertionEvent::*;
 
-    for event in events.iter() {
-        if let ConvertingWeaponAndEnemy { status, enemy, .. } = event {
-            if let Ok(mut under_converting_weapon) = query.get_mut(*enemy) {
-                match status {
-                    CollisionStatus::Started => under_converting_weapon.0 = true,
-                    CollisionStatus::Stopped => under_converting_weapon.0 = false,
+    let (entity_area, mut area_visibility, mut charming_area) = charming_areas.single_mut();
+
+    if charming_area.active_in.tick(time.delta()).finished() {
+        area_visibility.is_visible = true;
+        charming_area.active_in.reset();
+        commands.entity(entity_area).insert(Play);
+
+        let mut rng = rand::thread_rng();
+        for (entity, eligible, ally, enemy) in eligible_query.iter() {
+            if eligible.is_eligible && rng.gen::<f32>() < LUCK_AT_CHARMING {
+                match (ally, enemy) {
+                    (Some(_), _) => convertion_writer.send(AllyResetCharming(entity)),
+                    (_, Some(_)) => convertion_writer.send(EnemyIntoAlly(entity)),
+                    _ => (),
                 }
             }
         }
     }
 }
 
-fn charm_entities_under_converting_weapon(
-    time: Res<Time>,
+fn charm_enemies(
     mut commands: Commands,
-    mut converting_weapon_timer: ResMut<ConvertingWeaponTimer>,
-    converting_weapon_query: Query<&GlobalTransform, With<ConvertingWeapon>>,
-    mut enemies_query: Query<(Entity, &UnderConvertingWeapon), With<Enemy>>,
-    mut allies_query: Query<(&UnderConvertingWeapon, &mut Charmed), With<Ally>>,
-    mut animations: ResMut<Assets<SpriteSheetAnimation>>,
+    mut convertion_reader: EventReader<AllyEnemyConvertionEvent>,
     game_assets: Res<GameAssets>,
     pink_selector_animations_set: Res<PinkSelectorAnimationsSet>,
 ) {
-    if converting_weapon_timer.0.tick(time.delta()).finished() {
-        converting_weapon_timer.0.reset();
+    use AllyEnemyConvertionEvent::*;
 
-        // Spawn the one-time animation
-        let global_transform = converting_weapon_query.single();
-        let animation =
-            SpriteSheetAnimation::from_range(0..=19, Duration::from_secs_f64(1.0 / 18.0)).once();
-        commands
-            .spawn_bundle(SpriteSheetBundle {
-                transform: Transform::from_translation(global_transform.translation),
-                sprite: TextureAtlasSprite {
-                    color: PINK_CONVERTING_WEAPON,
-                    custom_size: Some(Vec2::new(5., 5.)),
-                    ..Default::default()
-                },
-                texture_atlas: game_assets.smoke_effect_07.clone(),
-                ..Default::default()
-            })
-            .insert(animations.add(animation))
-            .insert(Play)
-            .insert(ConvertingWeaponAnimation);
-
-        let mut rng = rand::thread_rng();
-        for (entity, under_converting_weapon) in enemies_query.iter_mut() {
-            if under_converting_weapon.0 && rng.gen::<f32>() < 0.2 {
-                commands
-                    .entity(entity)
-                    .insert(CollisionLayers::none().with_group(GameLayer::Ally).with_masks(&[
-                        GameLayer::Player,
-                        GameLayer::Ally,
-                        GameLayer::Enemy,
-                        GameLayer::ConvertingWeapon,
-                    ]))
-                    .insert(Charmed(Timer::new(CHARMED_DURATION, false)))
-                    .insert(Ally)
-                    .remove::<Enemy>()
-                    .with_children(|parent| {
-                        // Spawn the love animation
-                        parent
-                            .spawn_bundle(SpriteSheetBundle {
-                                transform: Transform::from_translation(Vec3::new(0., 1.1, 0.)),
-                                sprite: TextureAtlasSprite {
-                                    custom_size: Some(Vec2::new(0.7, 0.7)),
-                                    ..Default::default()
-                                },
-                                texture_atlas: game_assets.pink_selector_01.clone(),
+    for convertion in convertion_reader.iter() {
+        if let EnemyIntoAlly(entity) = convertion {
+            commands
+                .entity(*entity)
+                .insert(CollisionLayers::none().with_group(GameLayer::Ally).with_masks(&[
+                    GameLayer::Player,
+                    GameLayer::Ally,
+                    GameLayer::Enemy,
+                    GameLayer::CharmingArea,
+                ]))
+                .insert(Charmed { active_until: Timer::new(CHARMED_DURATION, false) })
+                .insert(Ally)
+                .remove::<Enemy>()
+                .with_children(|parent| {
+                    // Spawn the love animation
+                    parent
+                        .spawn_bundle(SpriteSheetBundle {
+                            transform: Transform::from_translation(Vec3::new(0., 1.1, 0.)),
+                            sprite: TextureAtlasSprite {
+                                custom_size: Some(Vec2::new(0.7, 0.7)),
                                 ..Default::default()
-                            })
-                            .insert(pink_selector_animations_set.full.clone())
-                            .insert(CharmedAnimation)
-                            .insert(Play);
-                    });
-            }
+                            },
+                            texture_atlas: game_assets.pink_selector_01.clone(),
+                            ..Default::default()
+                        })
+                        .insert(pink_selector_animations_set.full.clone())
+                        .insert(CharmedAnimation)
+                        .insert(Play);
+                });
         }
+    }
+}
 
-        for (under_converting_weapon, mut charmed) in allies_query.iter_mut() {
-            if under_converting_weapon.0 && rng.gen::<f32>() < 0.2 {
-                charmed.0.reset();
+fn refresh_allies_charming(
+    mut convertion_reader: EventReader<AllyEnemyConvertionEvent>,
+    mut charmed_query: Query<&mut Charmed>,
+) {
+    use AllyEnemyConvertionEvent::*;
+
+    for convertion in convertion_reader.iter() {
+        if let AllyResetCharming(entity) = convertion {
+            if let Ok(mut charmed) = charmed_query.get_mut(*entity) {
+                charmed.active_until.reset();
             }
         }
     }
 }
 
-fn delete_converting_weapon_animation(
+fn uncharm_allies(
     mut commands: Commands,
+    mut convertion_reader: EventReader<AllyEnemyConvertionEvent>,
+    mut charmed_query: Query<(Entity, &Children), With<Charmed>>,
+    mut charmed_anim_query: Query<(), With<CharmedAnimation>>,
+) {
+    use AllyEnemyConvertionEvent::*;
+
+    for convertion in convertion_reader.iter() {
+        if let AllyIntoEnemy(entity) = convertion {
+            if let Ok((entity, children)) = charmed_query.get_mut(*entity) {
+                let mut entity_command = commands.entity(entity);
+
+                entity_command
+                    .insert(CollisionLayers::none().with_group(GameLayer::Enemy).with_masks(&[
+                        GameLayer::Player,
+                        GameLayer::Ally,
+                        GameLayer::Enemy,
+                        GameLayer::CharmingArea,
+                    ]))
+                    .remove::<Ally>()
+                    .remove::<Charmed>()
+                    .insert(Enemy);
+
+                match children.iter().filter(|e| charmed_anim_query.get(**e).is_ok()).next() {
+                    Some(entity) => {
+                        entity_command.remove_children(&[*entity]);
+                        commands.entity(*entity).despawn();
+                    }
+                    None => (),
+                }
+            }
+        }
+    }
+}
+
+fn hide_charming_animation(
     removals: RemovedComponents<Play>,
-    animation_query: Query<&ConvertingWeaponAnimation>,
+    mut animation_query: Query<&mut Visibility, With<CharmingArea>>,
 ) {
     for entity in removals.iter() {
-        if let Ok(_) = animation_query.get(entity) {
-            commands.entity(entity).despawn();
+        if let Ok(mut visibility) = animation_query.get_mut(entity) {
+            visibility.is_visible = false;
+        }
+    }
+}
+
+fn mark_charmed_eligibles(
+    mut events: EventReader<GameCollisionEvent>,
+    mut query: Query<&mut CharmedEligible>,
+) {
+    use GameCollisionEvent::CharmedEnemy;
+
+    for event in events.iter() {
+        if let CharmedEnemy { status, enemy, .. } = event {
+            if let Ok(mut charmed_eligible) = query.get_mut(*enemy) {
+                match status {
+                    CollisionStatus::Started => charmed_eligible.is_eligible = true,
+                    CollisionStatus::Stopped => charmed_eligible.is_eligible = false,
+                }
+            }
         }
     }
 }
@@ -622,7 +660,7 @@ fn change_health_animation(
 
 fn tick_invulnerable(time: Res<Time>, mut invulnerable_query: Query<&mut Invulnerable>) {
     for mut invulnerable in invulnerable_query.iter_mut() {
-        invulnerable.0.tick(time.delta());
+        invulnerable.active_until.tick(time.delta());
     }
 }
 
@@ -633,7 +671,7 @@ fn display_invulnerability(
     for (invulnerable, children) in invulnerable_query.iter_mut() {
         for child in children.iter() {
             if let Ok(mut texture_atlas_sprite) = child_query.get_mut(*child) {
-                if invulnerable.0.finished() {
+                if invulnerable.active_until.finished() {
                     texture_atlas_sprite.color = Color::default();
                 } else {
                     texture_atlas_sprite.color = Color::RED;
@@ -643,9 +681,17 @@ fn display_invulnerability(
     }
 }
 
-fn tick_charmed(time: Res<Time>, mut charmed_query: Query<&mut Charmed>) {
-    for mut charmed in charmed_query.iter_mut() {
-        charmed.0.tick(time.delta());
+fn tick_charmed(
+    time: Res<Time>,
+    mut charmed_query: Query<(Entity, &mut Charmed)>,
+    mut convertion_writer: EventWriter<AllyEnemyConvertionEvent>,
+) {
+    use AllyEnemyConvertionEvent::*;
+
+    for (entity, mut charmed) in charmed_query.iter_mut() {
+        if charmed.active_until.tick(time.delta()).finished() {
+            convertion_writer.send(AllyIntoEnemy(entity));
+        }
     }
 }
 
@@ -655,11 +701,11 @@ fn change_charmed_animation(
     pink_selector_animations: Res<PinkSelectorAnimationsSet>,
 ) {
     for (charmed, children) in charmed_query.iter() {
-        let new_animation = if charmed.0.percent_left() > 0.75 {
+        let new_animation = if charmed.active_until.percent_left() > 0.75 {
             &pink_selector_animations.full
-        } else if charmed.0.percent_left() > 0.50 {
+        } else if charmed.active_until.percent_left() > 0.50 {
             &pink_selector_animations.two_third
-        } else if charmed.0.percent_left() > 0.25 {
+        } else if charmed.active_until.percent_left() > 0.25 {
             &pink_selector_animations.one_third
         } else {
             &pink_selector_animations.empty
@@ -757,10 +803,14 @@ pub struct TakingDamage {
 pub struct Player;
 
 #[derive(Component)]
-pub struct Invulnerable(Timer);
+pub struct Invulnerable {
+    active_until: Timer,
+}
 
 #[derive(Component)]
-pub struct Charmed(Timer);
+pub struct Charmed {
+    active_until: Timer,
+}
 
 #[derive(Component)]
 pub struct CharmedAnimation;
@@ -780,13 +830,18 @@ impl Default for FollowNearest {
 }
 
 #[derive(Component)]
-pub struct ConvertingWeapon;
+pub struct CharmingArea {
+    active_in: Timer,
+}
 
 #[derive(Component)]
-pub struct ConvertingWeaponTimer(Timer);
+pub struct CharmedEligible {
+    is_eligible: bool,
+}
 
-#[derive(Component)]
-pub struct ConvertingWeaponAnimation;
-
-#[derive(Component)]
-pub struct UnderConvertingWeapon(bool);
+#[derive(Debug, Copy, Clone)]
+pub enum AllyEnemyConvertionEvent {
+    AllyResetCharming(Entity),
+    EnemyIntoAlly(Entity),
+    AllyIntoEnemy(Entity),
+}
