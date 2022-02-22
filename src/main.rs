@@ -314,7 +314,7 @@ fn reorder_sprite_units(mut shape_query: Query<&mut Transform, With<CollisionSha
 }
 
 fn change_animation_from_velocity(
-    parent_query: Query<(&Velocity, &Health, &Children)>,
+    parent_query: Query<(&Velocity, Option<&Health>, &Children)>,
     mut child_query: Query<(
         &mut TextureAtlasSprite,
         &mut Handle<SpriteSheetAnimation>,
@@ -324,7 +324,7 @@ fn change_animation_from_velocity(
     for (velocity, health, children) in parent_query.iter() {
         for &child in children.iter() {
             if let Ok((mut sprite, mut animation, animations_set)) = child_query.get_mut(child) {
-                if let Health::Empty = health {
+                if health.map_or(false, |h| matches!(h, Health::Empty)) {
                     *animation = animations_set.death.clone();
                 } else {
                     if velocity.linear[0] > 0. {
