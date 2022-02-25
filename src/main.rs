@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::Duration;
 
 use benimator::*;
@@ -23,7 +24,7 @@ const CHARMING_PINK: Color = Color::rgba(1., 0.584, 0.753, 1.);
 const INVULNERABLE_DURATION: Duration = Duration::from_millis(2 * 1000 + 500); // 2.5s
 const CHARMED_DURATION: Duration = Duration::from_millis(25 * 1000); // 25s
 const CHARMING_AREA_COOLDOWN: Duration = Duration::from_secs(2);
-const LUCK_AT_CHARMING: f32 = 0.2;
+const LUCK_AT_CHARMING: f32 = 0.5;
 
 // For wasm-pack to be happy...
 #[cfg(target_arch = "wasm32")]
@@ -149,7 +150,7 @@ fn spawn_player(
     let animations_set = CharactersAnimationsSet {
         idle: animations.add(character.idle_animation()),
         walk: animations.add(character.walk_animation()),
-        attack: animations.add(character.attack_animation()),
+        _attack: animations.add(character.attack_animation()),
         death: animations.add(character.death_animation().once()),
     };
 
@@ -232,7 +233,7 @@ fn spawn_player(
                         .with_group(GameLayer::CharmingArea)
                         .with_masks(&[GameLayer::Ally, GameLayer::Enemy]),
                 )
-                .insert(CharmingArea { active_in: Timer::new(CHARMING_AREA_COOLDOWN, false) })
+                .insert(CharmingArea::default())
                 .insert(
                     animations.add(
                         SpriteSheetAnimation::from_range(
@@ -260,7 +261,7 @@ fn spawn_ennemies(
                 let animation = CharactersAnimationsSet {
                     idle: animations.add(elemental.idle_animation()),
                     walk: animations.add(elemental.walk_animation()),
-                    attack: animations.add(elemental.attack_animation()),
+                    _attack: animations.add(elemental.attack_animation()),
                     death: animations.add(elemental.death_animation().once()),
                 };
                 (game_assets.magic_elementals.clone(), animation)
@@ -269,7 +270,7 @@ fn spawn_ennemies(
                 let animation = CharactersAnimationsSet {
                     idle: animations.add(inferno.idle_animation()),
                     walk: animations.add(inferno.walk_animation()),
-                    attack: animations.add(inferno.attack_animation()),
+                    _attack: animations.add(inferno.attack_animation()),
                     death: animations.add(inferno.death_animation().once()),
                 };
                 (game_assets.infernos.clone(), animation)
@@ -278,7 +279,7 @@ fn spawn_ennemies(
                 let animation = CharactersAnimationsSet {
                     idle: animations.add(necromancer.idle_animation()),
                     walk: animations.add(necromancer.walk_animation()),
-                    attack: animations.add(necromancer.attack_animation()),
+                    _attack: animations.add(necromancer.attack_animation()),
                     death: animations.add(necromancer.death_animation().once()),
                 };
                 (game_assets.necromancers.clone(), animation)
@@ -305,7 +306,6 @@ fn spawn_ennemies(
                 ]))
                 .insert(Enemy)
                 .insert(FollowNearest { max_speed: rng.gen_range(0.2..=1.2) })
-                .insert(CharmedEligible { is_eligible: false })
                 .with_children(|parent| {
                     parent
                         .spawn_bundle(SpriteSheetBundle {
@@ -492,26 +492,28 @@ fn animate_and_disable_dead_entities(
 fn tick_charming_areas(
     time: Res<Time>,
     mut commands: Commands,
-    mut charming_areas: Query<(Entity, &mut Visibility, &mut CharmingArea)>,
-    eligible_query: Query<(Entity, &CharmedEligible, Option<&Ally>, Option<&Enemy>)>,
+    mut charming_areas_query: Query<(Entity, &mut Visibility, &mut CharmingArea)>,
+    eligible_query: Query<(Option<&Ally>, Option<&Enemy>)>,
     mut convertion_writer: EventWriter<AllyEnemyConvertionEvent>,
 ) {
     use AllyEnemyConvertionEvent::*;
 
-    let (entity_area, mut area_visibility, mut charming_area) = charming_areas.single_mut();
+    let mut rng = rand::thread_rng();
+    for (entity_area, mut area_visibility, mut charming_area) in charming_areas_query.iter_mut() {
+        if charming_area.active_in.tick(time.delta()).finished() {
+            area_visibility.is_visible = true;
+            charming_area.active_in.reset();
+            commands.entity(entity_area).insert(Play);
 
-    if charming_area.active_in.tick(time.delta()).finished() {
-        area_visibility.is_visible = true;
-        charming_area.active_in.reset();
-        commands.entity(entity_area).insert(Play);
-
-        let mut rng = rand::thread_rng();
-        for (entity, eligible, ally, enemy) in eligible_query.iter() {
-            if eligible.is_eligible && rng.gen::<f32>() < LUCK_AT_CHARMING {
-                match (ally, enemy) {
-                    (Some(_), _) => convertion_writer.send(AllyResetCharming(entity)),
-                    (_, Some(_)) => convertion_writer.send(EnemyIntoAlly(entity)),
-                    _ => (),
+            for entity in charming_area.eligibles.drain() {
+                if let Ok((ally, enemy)) = eligible_query.get(entity) {
+                    if rng.gen::<f32>() < LUCK_AT_CHARMING {
+                        match (ally, enemy) {
+                            (Some(_), _) => convertion_writer.send(AllyResetCharming(entity)),
+                            (_, Some(_)) => convertion_writer.send(EnemyIntoAlly(entity)),
+                            _ => (),
+                        }
+                    }
                 }
             }
         }
@@ -578,7 +580,7 @@ fn uncharm_allies(
     mut commands: Commands,
     mut convertion_reader: EventReader<AllyEnemyConvertionEvent>,
     mut charmed_query: Query<(Entity, &Children), With<Charmed>>,
-    mut charmed_anim_query: Query<(), With<CharmedAnimation>>,
+    charmed_anim_query: Query<(), With<CharmedAnimation>>,
 ) {
     use AllyEnemyConvertionEvent::*;
 
@@ -623,17 +625,17 @@ fn hide_charming_animation(
 
 fn mark_charmed_eligibles(
     mut events: EventReader<GameCollisionEvent>,
-    mut query: Query<&mut CharmedEligible>,
+    mut charming_area_query: Query<&mut CharmingArea>,
 ) {
     use GameCollisionEvent::CharmedEnemy;
 
     for event in events.iter() {
-        if let CharmedEnemy { status, enemy, .. } = event {
-            if let Ok(mut charmed_eligible) = query.get_mut(*enemy) {
+        if let CharmedEnemy { status, enemy, charming_area } = event {
+            if let Ok(mut charming_area) = charming_area_query.get_mut(*charming_area) {
                 match status {
-                    CollisionStatus::Started => charmed_eligible.is_eligible = true,
-                    CollisionStatus::Stopped => charmed_eligible.is_eligible = false,
-                }
+                    CollisionStatus::Started => charming_area.eligibles.insert(*enemy),
+                    CollisionStatus::Stopped => charming_area.eligibles.remove(enemy),
+                };
             }
         }
     }
@@ -743,7 +745,7 @@ enum MyStates {
 pub struct CharactersAnimationsSet {
     idle: Handle<SpriteSheetAnimation>,
     walk: Handle<SpriteSheetAnimation>,
-    attack: Handle<SpriteSheetAnimation>,
+    _attack: Handle<SpriteSheetAnimation>,
     death: Handle<SpriteSheetAnimation>,
 }
 
@@ -832,11 +834,16 @@ impl Default for FollowNearest {
 #[derive(Component)]
 pub struct CharmingArea {
     active_in: Timer,
+    eligibles: HashSet<Entity>,
 }
 
-#[derive(Component)]
-pub struct CharmedEligible {
-    is_eligible: bool,
+impl Default for CharmingArea {
+    fn default() -> CharmingArea {
+        CharmingArea {
+            active_in: Timer::new(CHARMING_AREA_COOLDOWN, false),
+            eligibles: HashSet::new(),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone)]

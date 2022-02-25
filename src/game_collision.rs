@@ -6,8 +6,8 @@ pub enum GameCollisionEvent {
     PlayerAndEnemy { status: CollisionStatus, player: Entity, enemy: Entity },
     AllyAndEnemy { status: CollisionStatus, ally: Entity, enemy: Entity },
     EnemyAndEnemy(CollisionStatus, Entity, Entity),
-    CharmedEnemy { status: CollisionStatus, charmed_area: Entity, enemy: Entity },
-    CharmedAlly { status: CollisionStatus, charmed_area: Entity, ally: Entity },
+    CharmedEnemy { status: CollisionStatus, charming_area: Entity, enemy: Entity },
+    CharmedAlly { status: CollisionStatus, charming_area: Entity, ally: Entity },
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -51,14 +51,14 @@ pub fn produce_game_collision_events(
             out_events.send(EnemyAndEnemy(status, entity_1, entity_2));
         // charmed area and enemy collide
         } else if is_charming_area_layer(layers_1) && is_enemy_layer(layers_2) {
-            out_events.send(CharmedEnemy { status, charmed_area: entity_1, enemy: entity_2 });
+            out_events.send(CharmedEnemy { status, charming_area: entity_1, enemy: entity_2 });
         } else if is_charming_area_layer(layers_2) && is_enemy_layer(layers_1) {
-            out_events.send(CharmedEnemy { status, charmed_area: entity_2, enemy: entity_1 });
+            out_events.send(CharmedEnemy { status, charming_area: entity_2, enemy: entity_1 });
         // charmed area and ally collide
         } else if is_charming_area_layer(layers_1) && is_ally_layer(layers_2) {
-            out_events.send(CharmedAlly { status, charmed_area: entity_1, ally: entity_2 });
+            out_events.send(CharmedAlly { status, charming_area: entity_1, ally: entity_2 });
         } else if is_charming_area_layer(layers_2) && is_ally_layer(layers_1) {
-            out_events.send(CharmedAlly { status, charmed_area: entity_2, ally: entity_1 });
+            out_events.send(CharmedAlly { status, charming_area: entity_2, ally: entity_1 });
         }
     }
 }
