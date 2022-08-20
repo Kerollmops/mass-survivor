@@ -8,6 +8,7 @@ use rand::Rng;
 use crate::assets::*;
 use crate::game_sprites::*;
 use crate::helper::*;
+use crate::timer::TimerComponent;
 use crate::{GameLayer, Player, Velocity};
 
 const TRACKING_SPEED: f32 = 0.03;
@@ -39,7 +40,7 @@ pub struct EnemyWavesCount(pub usize);
 #[derive(Bundle)]
 pub struct EnemyWaveBundle {
     pub kind: EnemyKind,
-    pub timer: Timer,
+    pub timer: TimerComponent,
     pub size: EnemyWaveSize,
     pub count: EnemyWavesCount,
     pub movement_kind: MovementKind,
@@ -245,7 +246,7 @@ pub fn spawn_enemy_waves(
     time: Res<Time>,
     iconset_assets: Res<IconsetAssets>,
     mut enemy_waves_query: Query<(
-        &mut Timer,
+        &mut TimerComponent,
         &EnemyKind,
         &EnemyWaveSize,
         &EnemyWavesCount,

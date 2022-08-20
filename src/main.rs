@@ -2,8 +2,10 @@ use std::f32::consts::PI;
 
 use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
-use bevy_asset_loader::AssetLoader;
+use bevy_asset_loader::prelude::*;
+use bevy_editor_pls::prelude::*;
 use heron::prelude::*;
+use timer::TimerComponent;
 
 use self::assets::*;
 use self::enemies::*;
@@ -13,6 +15,7 @@ mod assets;
 mod enemies;
 mod game_sprites;
 mod helper;
+mod timer;
 
 const MAP_SIZE: u32 = 41;
 const GRID_WIDTH: f32 = 0.05;
@@ -25,16 +28,17 @@ const AXE_HEAD_COLOR: Color = Color::rgb(0.52, 0.62, 0.8);
 const AXE_HEAD_SPEED: f32 = 2.; // radian/s
 
 fn main() {
-    let mut app = App::new();
-    AssetLoader::new(MyStates::AssetLoading)
-        .continue_to_state(MyStates::Next)
-        .with_collection::<IconsetAssets>()
-        .build(&mut app);
-
-    app.add_state(MyStates::AssetLoading)
+    App::new()
+        .add_loading_state(
+            LoadingState::new(MyStates::AssetLoading)
+                .continue_to_state(MyStates::Next)
+                .with_collection::<IconsetAssets>(),
+        )
+        .add_state(MyStates::AssetLoading)
         .insert_resource(ClearColor(Color::rgb(0.53, 0.53, 0.53)))
         .add_plugins(DefaultPlugins)
         .add_plugin(PhysicsPlugin::default())
+        .add_plugin(EditorPlugin)
         .insert_resource(Gravity::from(Vec3::ZERO))
         .add_startup_system(setup)
         .add_startup_system(spawn_player)
@@ -58,15 +62,17 @@ fn main() {
 }
 
 fn setup(mut commands: Commands) {
-    let mut camera_bundle = OrthographicCameraBundle::new_2d();
-    camera_bundle.orthographic_projection.scale = 1. / 50.;
+    let camera_bundle = Camera2dBundle {
+        projection: OrthographicProjection { scale: 1. / 50., ..Default::default() },
+        ..Default::default()
+    };
     commands.spawn_bundle(camera_bundle);
     commands.insert_resource(LootAllGemsFor(Timer::from_seconds(0., false)));
 
     // Setup enemy waves
     commands.spawn_bundle(EnemyWaveBundle {
         kind: EnemyKind::BlueFish,
-        timer: Timer::from_seconds(3., false),
+        timer: TimerComponent::from_seconds(3., false),
         size: EnemyWaveSize(40),
         count: EnemyWavesCount(2),
         movement_kind: MovementKind::Tracking,
@@ -74,7 +80,7 @@ fn setup(mut commands: Commands) {
 
     commands.spawn_bundle(EnemyWaveBundle {
         kind: EnemyKind::Pumpkin,
-        timer: Timer::from_seconds(10., true),
+        timer: TimerComponent::from_seconds(10., true),
         size: EnemyWaveSize(10),
         count: EnemyWavesCount(3),
         movement_kind: MovementKind::SlowWalking,
@@ -82,7 +88,7 @@ fn setup(mut commands: Commands) {
 
     commands.spawn_bundle(EnemyWaveBundle {
         kind: EnemyKind::SkeletonHead,
-        timer: Timer::from_seconds(15., false),
+        timer: TimerComponent::from_seconds(15., false),
         size: EnemyWaveSize(30),
         count: EnemyWavesCount(1),
         movement_kind: MovementKind::RunningGroup,
@@ -90,7 +96,7 @@ fn setup(mut commands: Commands) {
 
     commands.spawn_bundle(EnemyWaveBundle {
         kind: EnemyKind::BigRedFish,
-        timer: Timer::from_seconds(25., false),
+        timer: TimerComponent::from_seconds(25., false),
         size: EnemyWaveSize(30),
         count: EnemyWavesCount(2),
         movement_kind: MovementKind::Tracking,
@@ -98,7 +104,7 @@ fn setup(mut commands: Commands) {
 
     commands.spawn_bundle(EnemyWaveBundle {
         kind: EnemyKind::Knife,
-        timer: Timer::from_seconds(35., false),
+        timer: TimerComponent::from_seconds(35., false),
         size: EnemyWaveSize(40),
         count: EnemyWavesCount(2),
         movement_kind: MovementKind::RunningGroup,
